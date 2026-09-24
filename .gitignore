@@ -1,0 +1,6 @@
+.pio/
+.vscode/
+backups/*.bin
+src/secrets.h
+*.log
+.DS_Store
