@@ -37,6 +37,7 @@ enum : uint8_t {
   PKT_CONTACT_MSG = 0x07, PKT_CHANNEL_MSG = 0x08,
   PKT_NO_MORE_MSGS = 0x0A, PKT_BATTERY = 0x0C, PKT_DEVICE_INFO = 0x0D,
   PKT_CONTACT_MSG_V3 = 0x10, PKT_CHANNEL_MSG_V3 = 0x11, PKT_CHANNEL_INFO = 0x12,
+  PKT_CUSTOM_VARS = 0x15, PKT_TUNING_PARAMS = 0x17, PKT_AUTOADD_CONFIG = 0x19,
   PKT_CHANNEL_DATA = 0x1B, PKT_ADVERTISEMENT = 0x80, PKT_ACK = 0x82,
   PKT_MSGS_WAITING = 0x83, PKT_LOG_DATA = 0x88
 };
@@ -94,6 +95,25 @@ static String   s_devName, s_model, s_version;
 static uint16_t s_batteryMv = 0;
 static uint8_t  s_maxChannels = 0;
 static String   s_channels[8];
+
+// MeshCore settings (parsed from SELF_INFO + GET_* responses)
+struct McCfg {
+  bool     ready       = false;
+  String   name;        bool haveName = false;
+  int      txPower     = 0;   bool haveTx = false;
+  uint32_t freqHz      = 0, bwHz = 0;
+  uint8_t  sf = 0, cr = 0;    bool haveRadio = false;
+  int32_t  lat = 0, lon = 0;  bool havePos = false;
+  uint8_t  multiAcks = 0, advertLoc = 0, telemBase = 0, telemLoc = 0, telemEnv = 0, manualAdd = 0;
+  bool     haveOther   = false;
+  float    rxDelay     = 0, airtime = 0;  bool haveTuning = false;
+  uint8_t  autoCfg = 0, autoHops = 0;     bool haveAuto = false;
+  String   chName[8];  bool chHave[8] = {false};
+  uint8_t  chSecret[8][16]; bool chSecretHave[8] = {false};
+  String   varName[16], varValue[16]; int varCount = 0;
+};
+static McCfg s_mc;
+static bool  s_mcReqTuning = false, s_mcReqVars = false, s_mcReqAuto = false;
 static std::vector<MeshMessage> s_msgs;
 static std::vector<MeshPeerInfo> s_peers;
 
@@ -544,11 +564,58 @@ static void handleMeshCoreFrame(const uint8_t* d, size_t n) {
   Serial.printf("[BRIDGE] rx 0x%02X len=%u\n", t, (unsigned)n);
   switch (t) {
     case PKT_SELF_INFO: {
-      if (n < 36) break;
+      if (n >= 58) {                       // tx power, position, other params, radio params
+        uint32_t freq = 0, bw = 0;
+        int32_t lat = 0, lon = 0;
+        memcpy(&lat, d + 36, 4);
+        memcpy(&lon, d + 40, 4);
+        memcpy(&freq, d + 48, 4);
+        memcpy(&bw, d + 52, 4);
+        s_mc.txPower   = (int8_t)d[2];
+        s_mc.lat = lat; s_mc.lon = lon;  s_mc.havePos = true;
+        s_mc.multiAcks = d[44]; s_mc.advertLoc = d[45];
+        s_mc.telemBase = d[46] & 3; s_mc.telemLoc = (d[46] >> 2) & 3; s_mc.telemEnv = (d[46] >> 4) & 3;
+        s_mc.manualAdd   = d[47];
+        s_mc.freqHz = freq; s_mc.bwHz = bw; s_mc.sf = d[56]; s_mc.cr = d[57];
+        s_mc.haveTx = s_mc.haveRadio = s_mc.haveOther = true;
+      }
       size_t o = 58;
-      if (o < n) s_devName = rdStr(d + o, n - o);
-      if (s_devName.isEmpty()) s_devName = "MeshCore node";
+      if (o < n) { s_mc.name = rdStr(d + o, n - o); s_mc.haveName = !s_mc.name.isEmpty(); }
+      if (s_devName.isEmpty()) s_devName = s_mc.name.length() ? s_mc.name : String("MeshCore node");
+      s_mc.ready = true;
       Serial.printf("[BRIDGE] self name='%s'\n", s_devName.c_str());
+      break;
+    }
+    case PKT_TUNING_PARAMS: {
+      if (n >= 9) {
+        uint32_t rx = 0, af = 0;
+        memcpy(&rx, d + 1, 4); memcpy(&af, d + 5, 4);
+        s_mc.rxDelay = (float)rx / 1000.0f;
+        s_mc.airtime = (float)af / 1000.0f;
+        s_mc.haveTuning = true;
+      }
+      break;
+    }
+    case PKT_CUSTOM_VARS: {
+      s_mc.varCount = 0;
+      String all = rdStr(d + 1, n > 1 ? n - 1 : 0);
+      int start = 0;
+      while (start < (int)all.length() && s_mc.varCount < 16) {
+        int comma = all.indexOf(',', start);
+        String pair = comma < 0 ? all.substring(start) : all.substring(start, comma);
+        int colon = pair.indexOf(':');
+        if (colon > 0) {
+          s_mc.varName[s_mc.varCount]  = pair.substring(0, colon);
+          s_mc.varValue[s_mc.varCount] = pair.substring(colon + 1);
+          s_mc.varCount++;
+        }
+        if (comma < 0) break;
+        start = comma + 1;
+      }
+      break;
+    }
+    case PKT_AUTOADD_CONFIG: {
+      if (n >= 3) { s_mc.autoCfg = d[1]; s_mc.autoHops = d[2]; s_mc.haveAuto = true; }
       break;
     }
     case PKT_DEVICE_INFO: {
@@ -964,6 +1031,8 @@ static bool connectToFoundDevice(const NimBLEAddress& addr, const String& name) 
     s_peerAddr = addr.toString().c_str();
     s_t0 = millis();
     s_initStage = 0;
+    s_mc = McCfg();
+    s_mcReqTuning = s_mcReqVars = s_mcReqAuto = false;
     Serial.printf("[BRIDGE] paired + connected to '%s'\n", s_peer.c_str());
     return true;
   }
@@ -971,6 +1040,193 @@ static bool connectToFoundDevice(const NimBLEAddress& addr, const String& name) 
   Serial.println("[BRIDGE] no known mesh service on device");
   s_client->disconnect();
   s_connecting = false;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// MeshCore settings
+// ---------------------------------------------------------------------------
+static String hexStr(const uint8_t* d, int n) {
+  static const char* H = "0123456789abcdef";
+  String s;
+  for (int i = 0; i < n; i++) { s += H[(d[i] >> 4) & 0xF]; s += H[d[i] & 0xF]; }
+  return s;
+}
+static int hexNibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+static bool hexBytes(const String& s, uint8_t* out, int n) {
+  if ((int)s.length() < n * 2) return false;
+  for (int i = 0; i < n; i++) {
+    int hi = hexNibble(s[i * 2]), lo = hexNibble(s[i * 2 + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out[i] = (uint8_t)((hi << 4) | lo);
+  }
+  return true;
+}
+static void putU32(std::vector<uint8_t>& f, uint32_t v) {
+  f.push_back(v & 0xFF); f.push_back((v >> 8) & 0xFF);
+  f.push_back((v >> 16) & 0xFF); f.push_back((v >> 24) & 0xFF);
+}
+
+String meshBridgeMeshCoreSettingsJson() {
+  String o; o.reserve(2048);
+  o += "{\"protocol\":\"meshcore\",\"ready\":";
+  o += s_mc.ready ? "true" : "false";
+  o += ",\"device\":{";
+  bool first = true;
+  auto key = [&](const char* k) { if (!first) o += ','; first = false; o += '"'; o += k; o += "\":"; };
+  if (s_mc.haveName)  { key("name"); o += '"'; mtJsonEsc(o, s_mc.name); o += '"'; }
+  if (s_mc.haveTx)    { key("tx_power"); o += String(s_mc.txPower); }
+  if (s_mc.haveRadio) {
+    key("freq_khz"); o += String(s_mc.freqHz / 1000);
+    key("bw_hz"); o += String(s_mc.bwHz);
+    key("spreading_factor"); o += String(s_mc.sf);
+    key("coding_rate"); o += String(s_mc.cr);
+  }
+  if (s_mc.havePos) {
+    key("latitude");  o += String(s_mc.lat / 1000000.0, 6);
+    key("longitude"); o += String(s_mc.lon / 1000000.0, 6);
+  }
+  if (s_mc.haveOther) {
+    key("multi_acks"); o += String(s_mc.multiAcks ? 1 : 0);
+    key("advert_location_policy"); o += String(s_mc.advertLoc);
+    key("telemetry_base"); o += String(s_mc.telemBase);
+    key("telemetry_location"); o += String(s_mc.telemLoc);
+    key("telemetry_environment"); o += String(s_mc.telemEnv);
+    key("manual_add_contacts"); o += String(s_mc.manualAdd ? 1 : 0);
+  }
+  if (s_mc.haveTuning) {
+    key("rx_delay_base"); o += String(s_mc.rxDelay, 3);
+    key("airtime_factor"); o += String(s_mc.airtime, 3);
+  }
+  if (s_mc.haveAuto) { key("autoadd_config"); o += String(s_mc.autoCfg); key("autoadd_max_hops"); o += String(s_mc.autoHops); }
+
+  o += "},\"channel\":{";
+  bool g = false;
+  for (int i = 0; i < 8; i++) {
+    if (!s_mc.chHave[i]) continue;
+    if (g) o += ','; g = true;
+    o += '"'; o += String(i); o += "\":{\"index\":"; o += String(i);
+    o += ",\"name\":\""; mtJsonEsc(o, s_mc.chName[i]); o += '"';
+    if (s_mc.chSecretHave[i]) { o += ",\"secret\":\""; o += hexStr(s_mc.chSecret[i], 16); o += '"'; }
+    o += '}';
+  }
+
+  o += "},\"vars\":[";
+  for (int i = 0; i < s_mc.varCount; i++) {
+    if (i) o += ',';
+    o += "{\"n\":\""; mtJsonEsc(o, s_mc.varName[i]);
+    o += "\",\"v\":\""; mtJsonEsc(o, s_mc.varValue[i]); o += "\"}";
+  }
+  o += "]}";
+  return o;
+}
+
+bool meshBridgeMeshCoreApply(uint8_t scope, uint8_t type, uint8_t field, const String& value, String& err) {
+  if (!s_connected || s_proto != "meshcore") { err = "not connected to a MeshCore node"; return false; }
+  std::vector<uint8_t> f;
+
+  if (scope == 100) {                 // device / radio / params
+    switch (field) {
+      case 0: {                       // advert name
+        f.push_back(8);
+        for (size_t i = 0; i < value.length() && i < 31; i++) f.push_back((uint8_t)value[i]);
+        s_mc.name = value; s_mc.haveName = true;
+        break;
+      }
+      case 1: {                       // tx power (dBm)
+        f.push_back(12); f.push_back((uint8_t)(int8_t)value.toInt());
+        s_mc.txPower = value.toInt(); s_mc.haveTx = true;
+        break;
+      }
+      case 2: case 3: case 4: case 5: { // radio params (whole set)
+        uint32_t freq = (field == 2) ? (uint32_t)value.toInt() * 1000 : s_mc.freqHz;
+        uint32_t bw   = (field == 3) ? (uint32_t)value.toInt() : s_mc.bwHz;
+        uint8_t  sf   = (field == 4) ? (uint8_t)value.toInt() : s_mc.sf;
+        uint8_t  cr   = (field == 5) ? (uint8_t)value.toInt() : s_mc.cr;
+        f.push_back(11); putU32(f, freq); putU32(f, bw); f.push_back(sf); f.push_back(cr); f.push_back(0);
+        s_mc.freqHz = freq; s_mc.bwHz = bw; s_mc.sf = sf; s_mc.cr = cr; s_mc.haveRadio = true;
+        break;
+      }
+      case 6: case 7: {               // lat / lon
+        int32_t lat = (field == 6) ? (int32_t)(value.toFloat() * 1000000.0f) : s_mc.lat;
+        int32_t lon = (field == 7) ? (int32_t)(value.toFloat() * 1000000.0f) : s_mc.lon;
+        f.push_back(14); putU32(f, (uint32_t)lat); putU32(f, (uint32_t)lon); putU32(f, 0);
+        s_mc.lat = lat; s_mc.lon = lon; s_mc.havePos = true;
+        break;
+      }
+      case 8: case 9: case 10: case 11: case 12: case 13: {  // other params (whole set)
+        if (field == 8)  s_mc.multiAcks = value.toInt() ? 1 : 0;
+        if (field == 9)  s_mc.advertLoc  = (uint8_t)value.toInt();
+        if (field == 10) s_mc.telemBase  = (uint8_t)value.toInt();
+        if (field == 11) s_mc.telemLoc   = (uint8_t)value.toInt();
+        if (field == 12) s_mc.telemEnv   = (uint8_t)value.toInt();
+        if (field == 13) s_mc.manualAdd  = value.toInt() ? 1 : 0;
+        f.push_back(38);
+        f.push_back(s_mc.manualAdd);
+        f.push_back((uint8_t)((s_mc.telemEnv << 4) | (s_mc.telemLoc << 2) | s_mc.telemBase));
+        f.push_back(s_mc.advertLoc);
+        f.push_back(s_mc.multiAcks);
+        s_mc.haveOther = true;
+        break;
+      }
+      case 14: case 15: {             // tuning params
+        float rx = (field == 14) ? value.toFloat() : s_mc.rxDelay;
+        float af = (field == 15) ? value.toFloat() : s_mc.airtime;
+        f.push_back(21); putU32(f, (uint32_t)(rx * 1000.0f)); putU32(f, (uint32_t)(af * 1000.0f));
+        s_mc.rxDelay = rx; s_mc.airtime = af; s_mc.haveTuning = true;
+        break;
+      }
+      case 16: case 17: {             // auto-add config
+        uint8_t cfg  = (field == 16) ? (uint8_t)value.toInt() : s_mc.autoCfg;
+        uint8_t hops = (field == 17) ? (uint8_t)value.toInt() : s_mc.autoHops;
+        f.push_back(58); f.push_back(cfg); f.push_back(hops);
+        s_mc.autoCfg = cfg; s_mc.autoHops = hops; s_mc.haveAuto = true;
+        break;
+      }
+      case 18: {                      // path hash mode (0..2)
+        f.push_back(61); f.push_back(0); f.push_back((uint8_t)value.toInt());
+        break;
+      }
+      case 19: {                      // BLE PIN (0 = random)
+        f.push_back(37); putU32(f, (uint32_t)value.toInt());
+        break;
+      }
+      default: err = "unsupported setting"; return false;
+    }
+    return writeFrame(f.data(), f.size());
+  }
+
+  if (scope == 102) {                 // channel(name + secret)
+    if (type > 7) { err = "bad channel"; return false; }
+    uint8_t name[32]; memset(name, 0, sizeof(name));
+    String nm = (field == 0) ? value : s_mc.chName[type];
+    for (size_t i = 0; i < nm.length() && i < 31; i++) name[i] = (uint8_t)nm[i];
+    uint8_t secret[16];
+    if (field == 1) { if (!hexBytes(value, secret, 16)) { err = "secret must be 32 hex chars"; return false; } }
+    else memcpy(secret, s_mc.chSecret[type], 16);
+    f.push_back(32); f.push_back((uint8_t)type);
+    f.insert(f.end(), name, name + 32);
+    f.insert(f.end(), secret, secret + 16);
+    s_mc.chName[type] = nm; s_mc.chHave[type] = true;
+    memcpy(s_mc.chSecret[type], secret, 16); s_mc.chSecretHave[type] = true;
+    return writeFrame(f.data(), f.size());
+  }
+
+  if (scope == 104) {                 // custom var: type = index, value = new value
+    if (type >= s_mc.varCount) { err = "unknown variable"; return false; }
+    String pair = s_mc.varName[type] + ":" + value;
+    f.push_back(41);
+    for (size_t i = 0; i < pair.length(); i++) f.push_back((uint8_t)pair[i]);
+    s_mc.varValue[type] = value;
+    return writeFrame(f.data(), f.size());
+  }
+
+  err = "bad scope";
   return false;
 }
 
@@ -1119,6 +1375,9 @@ void meshBridgeLoop() {
     }
   }
   if (s_initStage >= 4) {
+    if (!s_mcReqTuning) { uint8_t f[1] = {43}; writeFrame(f, 1); s_mcReqTuning = true; }
+    if (!s_mcReqVars)   { uint8_t f[1] = {40}; writeFrame(f, 1); s_mcReqVars = true; }
+    if (!s_mcReqAuto)   { uint8_t f[1] = {59}; writeFrame(f, 1); s_mcReqAuto = true; }
     if (s_wantPoll || now - s_lastPoll > 3000) {
       uint8_t f[1] = {0x0A};
       writeFrame(f, 1);

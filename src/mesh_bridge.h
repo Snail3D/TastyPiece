@@ -73,6 +73,9 @@ String meshBridgeConfigJson();                     // config/module/channel/owne
 bool   meshBridgeApplySetting(uint8_t scope, uint8_t type, uint8_t field,
                               const String& value, String& err);
 void   meshBridgeRequestOwner();
+String meshBridgeMeshCoreSettingsJson();
+bool   meshBridgeMeshCoreApply(uint8_t scope, uint8_t type, uint8_t field,
+                               const String& value, String& err);
 
 // --- actions ---------------------------------------------------------------
 bool meshBridgeSendChannel(uint8_t ch, const String& text, String& err);

@@ -288,7 +288,9 @@ static void handleReconnect() {
 }
 
 static void handleSettings() {
-  String out = meshBridgeConfigJson();
+  String out = (meshBridgeProtocol() == "meshcore")
+                   ? meshBridgeMeshCoreSettingsJson()
+                   : meshBridgeConfigJson();
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", out);
 }
@@ -303,8 +305,18 @@ static void handleSetting() {
   int type  = doc["type"]  | 0;
   int field = doc["field"] | 0;
   String value = doc["value"].as<String>();
-  if (scope < 0 || scope > 3) {
+  if (scope < 0 || scope > 255) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"bad scope\"}");
+    return;
+  }
+  if (scope >= 100) {
+    String err;
+    bool ok = meshBridgeMeshCoreApply((uint8_t)scope, (uint8_t)type, (uint8_t)field, value, err);
+    addEvent(String("set mc s") + scope + " t" + type + " f" + field);
+    JsonDocument r; r["ok"] = ok;
+    if (!ok) r["error"] = err;
+    String out; serializeJson(r, out);
+    server.send(ok ? 200 : 400, "application/json", out);
     return;
   }
   String err;
@@ -379,16 +391,16 @@ static void handleSerialCmd(const String& line) {
     meshBridgeRequestOwner();
     Serial.println("[TP] owner requested");
   } else if (verb == "cfgtest") {
-    String direct = meshBridgeConfigJson();
+    bool mc = meshBridgeProtocol() == "meshcore";
+    String direct = mc ? meshBridgeMeshCoreSettingsJson() : meshBridgeConfigJson();
     {
       JsonDocument d;
       DeserializationError e = deserializeJson(d, direct);
-      Serial.printf("[TP] direct len=%u json=%s cfg=%u mod=%u ch=%u owner=%u short=%s long=%s\n",
+      Serial.printf("[TP] direct len=%u json=%s cfg=%u mod=%u ch=%u owner=%u dev=%u vars=%u\n",
                     (unsigned)direct.length(), e.c_str(),
                     (unsigned)d["config"].size(), (unsigned)d["module"].size(),
                     (unsigned)d["channel"].size(), (unsigned)d["owner"].size(),
-                    d["owner"]["short_name"].as<const char*>(),
-                    d["owner"]["long_name"].as<const char*>());
+                    (unsigned)d["device"].size(), (unsigned)d["vars"].size());
     }
     WiFiClient c;
     if (c.connect(WiFi.softAPIP(), 80)) {
@@ -412,12 +424,14 @@ static void handleSerialCmd(const String& line) {
         if (millis() - t0 > 8000) break;
       }
       c.stop();
+      int b0 = body.indexOf('{'), b1 = body.lastIndexOf('}');
+      if (b0 >= 0 && b1 > b0) body = body.substring(b0, b1 + 1);
       JsonDocument doc;
       DeserializationError e = deserializeJson(doc, body);
-      Serial.printf("[TP] cfgtest bytes=%u json=%s cfg=%u mod=%u ch=%u owner=%u\n",
+      Serial.printf("[TP] cfgtest bytes=%u json=%s dev=%u ch=%u vars=%u cfg=%u\n",
                     (unsigned)body.length(), e.c_str(),
-                    (unsigned)doc["config"].size(), (unsigned)doc["module"].size(),
-                    (unsigned)doc["channel"].size(), (unsigned)doc["owner"].size());
+                    (unsigned)doc["device"].size(), (unsigned)doc["channel"].size(),
+                    (unsigned)doc["vars"].size(), (unsigned)doc["config"].size());
     } else Serial.println("[TP] cfgtest connect failed");
   } else if (verb == "memtest") {
     String s; s.reserve(8192);
@@ -425,8 +439,9 @@ static void handleSerialCmd(const String& line) {
     Serial.printf("[TP] memtest len=%u heap=%u\n", (unsigned)s.length(),
                   (unsigned)ESP.getFreeHeap());
   } else if (verb == "cfg") {
-    String dump = meshBridgeConfigJson();
-    Serial.printf("[TP] cfglen=%u\n", (unsigned)dump.length());
+    bool mc = meshBridgeProtocol() == "meshcore";
+    String dump = mc ? meshBridgeMeshCoreSettingsJson() : meshBridgeConfigJson();
+    Serial.printf("[TP] cfglen=%u proto=%s\n", (unsigned)dump.length(), mc ? "meshcore" : "meshtastic");
     for (size_t i = 0; i < dump.length(); i += 400) {
       Serial.print(dump.substring(i, i + 400));
       delay(25);

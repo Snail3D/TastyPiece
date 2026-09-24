@@ -328,7 +328,19 @@ function cfgLookup(scope,type,key){
   if(scope===1)return ((SETTINGS.module||{})[type]||{})[key];
   if(scope===2)return ((SETTINGS.channel||{})[type]||{})[key];
   if(scope===3)return (SETTINGS.owner||{})[key];
+  if(scope===100)return (SETTINGS.device||{})[key];
+  if(scope===102)return ((SETTINGS.channel||{})[type]||{})[key];
+  if(scope===104)return ((SETTINGS.vars||[])[type]||{}).v;
 }
+const MC_FIELDS=[
+ {f:0,k:'name',kind:4},{f:1,k:'tx_power',kind:2},{f:2,k:'freq_khz',kind:1},
+ {f:3,k:'bw_hz',kind:1},{f:4,k:'spreading_factor',kind:1},{f:5,k:'coding_rate',kind:1},
+ {f:6,k:'latitude',kind:3},{f:7,k:'longitude',kind:3},{f:8,k:'multi_acks',kind:0},
+ {f:9,k:'advert_location_policy',kind:1},{f:10,k:'telemetry_base',kind:1},
+ {f:11,k:'telemetry_location',kind:1},{f:12,k:'telemetry_environment',kind:1},
+ {f:13,k:'manual_add_contacts',kind:0},{f:14,k:'rx_delay_base',kind:3},
+ {f:15,k:'airtime_factor',kind:3},{f:16,k:'autoadd_config',kind:1},
+ {f:17,k:'autoadd_max_hops',kind:1},{f:18,k:'path_hash_mode',kind:1},{f:19,k:'ble_pin',kind:1}];
 function cfgRow(scope,type,fd){
   const v=cfgLookup(scope,type,fd.k), name=pretty(fd.k);
   if(fd.kind===0){
@@ -354,8 +366,23 @@ function renderSettings(){
   const note=$('cfg-note'), box=$('cfg-groups');
   if(!note||!box)return;
   const proto=MESH.protocol||'';
+  if(proto==='meshcore'){
+    if(!SETTINGS.ready){note.textContent='Reading settings from the node…';box.innerHTML='';return;}
+    note.textContent='Edits are written straight to the node.';
+    let html=cfgGroup('📻 Radio & node',MC_FIELDS.map(fd=>cfgRow(100,0,fd)),true);
+    const chs=SETTINGS.channel||{};
+    Object.keys(chs).forEach(i=>{
+      const rows=cfgRow(102,Number(i),{f:0,k:'name',kind:4})+cfgRow(102,Number(i),{f:1,k:'secret',kind:4});
+      html+=cfgGroup('📶 Channel '+i,rows,false);
+    });
+    const vars=SETTINGS.vars||[];
+    if(vars.length){
+      html+=cfgGroup('🧩 Custom variables',vars.map((v,idx)=>`<div class="cfgrow"><div>${esc(v.n)}</div><div class="ctl"><input type="text" value="${esc(v.v)}" onchange="setCfg(104,${idx},0,this.value)"></div></div>`),false);
+    }
+    box.innerHTML=html;return;
+  }
   if(proto!=='meshtastic'){
-    note.textContent=(proto==='meshcore')?'Node settings currently apply to Meshtastic nodes. MeshCore settings are on the way.':'Connect to a Meshtastic node to edit its settings here.';
+    note.textContent='Connect to a Meshtastic or MeshCore node to edit its settings here.';
     box.innerHTML='';return;
   }
   if(!SETTINGS.ready){note.textContent='Reading settings from the node…';box.innerHTML='';return;}

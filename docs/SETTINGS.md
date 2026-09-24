@@ -61,9 +61,31 @@ for f in admin.proto config.proto module_config.proto channel.proto mesh.proto p
 done
 ```
 
+## MeshCore
+
+MeshCore's companion protocol uses fixed binary frames instead of protobuf, so
+it gets its own field set (scope numbers `100+`):
+
+| Scope | What | Fields |
+| --- | --- | --- |
+| 100 | Node & radio | node name, TX power, frequency (kHz), bandwidth (Hz), spreading factor, coding rate, latitude/longitude, multi-acks, advert location policy, telemetry modes (base/loc/env), manual-add contacts, RX delay base, airtime factor, auto-add config, auto-add max hops, path-hash mode, BLE PIN |
+| 102 | Channel (`type` = channel index) | name, secret (32 hex chars) |
+| 104 | Custom variable (`type` = index) | value |
+
+Reads come from `SELF_INFO` (which carries name, radio params, position, TX
+power and the other-params byte), plus `CMD_GET_TUNING_PARAMS`, `CMD_GET_CUSTOM_VARS`
+and `CMD_GET_AUTOADD_CONFIG`. Writes use `CMD_SET_ADVERT_NAME`,
+`CMD_SET_RADIO_PARAMS`, `CMD_SET_RADIO_TX_POWER`, `CMD_SET_ADVERT_LATLON`,
+`CMD_SET_TUNING_PARAMS`, `CMD_SET_OTHER_PARAMS`, `CMD_SET_CHANNEL`,
+`CMD_SET_CUSTOM_VAR`, `CMD_SET_AUTOADD_CONFIG`, `CMD_SET_PATH_HASH_MODE` and
+`CMD_SET_DEVICE_PIN`.
+
+Note: `SET_CHANNEL` frames are 50 bytes, which is why the gateway negotiates a
+517-byte BLE MTU.
+
 ## Notes
 
-- Channels are edited through their `ChannelSettings` sub-message; the channel
-  `role` (Disabled / Primary / Secondary) is shown read-only for now.
-- MeshCore node settings (its `SET_*` companion commands) are not wired up yet —
-  the Settings tab says so plainly instead of showing dead controls.
+- Meshtastic channels are edited through their `ChannelSettings` sub-message;
+  the channel `role` (Disabled / Primary / Secondary) is shown read-only.
+- The MeshCore BLE PIN field writes a fixed PIN to the node (`0` = random each
+  boot). The current session PIN is only shown on the node's own screen.
