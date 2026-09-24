@@ -14,13 +14,21 @@ struct MeshMessage {
   bool     outgoing = false;
 };
 
+// A nearby BLE device seen while scanning (candidate mesh node to bridge).
+struct MeshNodeInfo {
+  String name;
+  String address;
+  int    rssi = 0;       // dBm
+  bool   meshcore = false;
+};
+
 // --- lifecycle -------------------------------------------------------------
 void   meshBridgeBegin();
 void   meshBridgeLoop();
 bool   meshBridgeConnected();
 
 // --- state -----------------------------------------------------------------
-String   meshBridgeStatus();     // idle|scanning|connecting|connected|error
+String   meshBridgeStatus();     // idle|scanning|connecting|connected|need_pin|not_found
 String   meshBridgePeer();       // device name being bridged
 String   meshBridgeDeviceName();
 String   meshBridgeModel();
@@ -29,6 +37,14 @@ uint16_t meshBridgeBatteryMv();
 uint8_t  meshBridgeChannelCount();
 String   meshBridgeChannelName(uint8_t idx);
 std::vector<MeshMessage>& meshBridgeMessages();
+
+// --- discovery / node picker ----------------------------------------------
+size_t meshBridgeNodeCount();
+bool   meshBridgeNodeAt(size_t i, MeshNodeInfo& out);
+String meshBridgeTarget();                        // pinned address ("" = auto)
+void   meshBridgeSetTarget(const String& address); // choose node by BLE address
+void   meshBridgeClearSelection();                 // forget target + PIN -> discovery mode
+void   meshBridgeRequestScan();                    // kick a scan on the next tick
 
 // --- actions ---------------------------------------------------------------
 bool meshBridgeSendChannel(uint8_t ch, const String& text, String& err);

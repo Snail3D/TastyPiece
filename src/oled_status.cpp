@@ -40,6 +40,14 @@ static bool i2cProbe(int sda, int scl) {
 }
 
 bool oledInit() {
+#if defined(BOARD_ESP32DEV)
+  // Classic ESP32 dev boards have no I2C OLED. Probing arbitrary pins is
+  // unsafe here: GPIO6-11 are the SPI-flash pins, so an I2C probe on them
+  // wedges flash access and watchdog-resets the chip. Skip probing.
+  s_oledOk  = false;
+  s_busInfo = "none (esp32dev)";
+  return false;
+#else
   for (auto& p : kPins) {
     if (i2cProbe(p[0], p[1])) {
       // Leave Wire configured on the discovered pins.
@@ -54,6 +62,7 @@ bool oledInit() {
   s_oledOk  = false;
   s_busInfo = "not found";
   return false;
+#endif
 }
 
 bool   oledAvailable() { return s_oledOk; }

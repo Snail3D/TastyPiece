@@ -161,6 +161,56 @@ static void handlePair() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+static void handleNodes() {
+  JsonDocument doc;
+  doc["status"]    = meshBridgeStatus();
+  doc["target"]    = meshBridgeTarget();
+  doc["connected"] = meshBridgeConnected();
+  doc["peer"]      = meshBridgePeer();
+  JsonArray arr = doc["devices"].to<JsonArray>();
+  for (size_t i = 0; i < meshBridgeNodeCount(); i++) {
+    MeshNodeInfo n;
+    if (!meshBridgeNodeAt(i, n)) break;
+    JsonObject d = arr.add<JsonObject>();
+    d["name"]     = n.name;
+    d["address"]  = n.address;
+    d["rssi"]     = n.rssi;
+    d["meshcore"] = n.meshcore;
+  }
+  String out;
+  serializeJson(doc, out);
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", out);
+}
+
+static void handleSelectNode() {
+  JsonDocument doc;
+  if (deserializeJson(doc, server.arg("plain"))) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"bad json\"}");
+    return;
+  }
+  String addr = doc["address"].as<String>();
+  addr.trim();
+  if (!addr.length()) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"bad address\"}");
+    return;
+  }
+  meshBridgeSetTarget(addr);
+  addEvent(String("node -> ") + addr);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+static void handleForget() {
+  meshBridgeClearSelection();
+  addEvent("node selection cleared");
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+static void handleScanReq() {
+  meshBridgeRequestScan();
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 static void handleSerialCmd(const String& line) {
   String cmd = line;
   cmd.trim();
@@ -190,6 +240,29 @@ static void handleSerialCmd(const String& line) {
     for (auto& m : meshBridgeMessages())
       Serial.printf("[TP]   %s%s ch%u %s: %s\n", m.outgoing ? "TX" : "RX",
                     m.kind == "direct" ? "(dm)" : "", m.channel, m.from.c_str(), m.text.c_str());
+  } else if (verb == "scan") {
+    Serial.println("[TP] scanning wifi...");
+    int n = WiFi.scanNetworks();
+    Serial.printf("[TP] scan: %d\n", n);
+    for (int i = 0; i < n; i++)
+      Serial.printf("[TP]   %-28s %4d dBm ch%d\n", WiFi.SSID(i).c_str(),
+                    WiFi.RSSI(i), WiFi.channel(i));
+    WiFi.scanDelete();
+  } else if (verb == "nodes") {
+    Serial.printf("[TP] target=%s status=%s devices=%u\n", meshBridgeTarget().c_str(),
+                  meshBridgeStatus().c_str(), (unsigned)meshBridgeNodeCount());
+    for (size_t i = 0; i < meshBridgeNodeCount(); i++) {
+      MeshNodeInfo n;
+      if (!meshBridgeNodeAt(i, n)) break;
+      Serial.printf("[TP]   %-22s %-17s %4d dBm%s\n", n.name.c_str(),
+                    n.address.c_str(), n.rssi, n.meshcore ? " [meshcore]" : "");
+    }
+  } else if (verb == "use") {
+    rest.trim();
+    if (rest.length()) { meshBridgeSetTarget(rest); addEvent(String("node -> ") + rest); }
+  } else if (verb == "forget") {
+    meshBridgeClearSelection();
+    addEvent("node selection cleared");
   } else if (verb == "selftest") {
     WiFiClient c;
     if (c.connect(WiFi.softAPIP(), 80)) {
@@ -211,7 +284,7 @@ static void handleSerialCmd(const String& line) {
       Serial.println("[TP] selftest: connect to AP failed");
     }
   } else {
-    Serial.println("[TP] cmds: status | selftest | pin <nnnnnn> | send <channel> <text>");
+    Serial.println("[TP] cmds: status | nodes | use <addr> | forget | scan | selftest | pin <nnnnnn> | send <channel> <text>");
   }
 }
 
@@ -249,9 +322,17 @@ void setup() {
   Serial.printf("OLED: %s (%s)\n", oled ? "ok" : "none", oledBusInfo().c_str());
   if (oled) oledRender(st);
 
+  // Bring up the BLE controller BEFORE Wi-Fi: on the single-radio ESP32-C3,
+  // initialising BT after the AP can disrupt the AP's beacons (coexistence).
+#if !defined(TP_DISABLE_BLE)
+  meshBridgeBegin();
+#endif
+
   WiFi.persistent(false);
   WiFi.setHostname(TP_FW_NAME);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
 
   WiFi.softAPConfig(TP_AP_IP, TP_AP_GW, TP_AP_MASK);
   bool ap = WiFi.softAP(TP_AP_SSID, TP_AP_PASS, TP_AP_CHANNEL);
@@ -263,14 +344,16 @@ void setup() {
 
   dnsServer.start(53, "*", WiFi.softAPIP());
 
-  meshBridgeBegin();
-
   server.on("/", HTTP_GET, []() { sendIndex(); });
   server.on("/api/status", HTTP_GET, []() { handleStatus(); });
   server.on("/api/mesh", HTTP_GET, []() { handleMesh(); });
   server.on("/api/log", HTTP_GET, []() { handleLog(); });
   server.on("/api/send", HTTP_POST, []() { handleSend(); });
   server.on("/api/pair", HTTP_POST, []() { handlePair(); });
+  server.on("/api/nodes", HTTP_GET, []() { handleNodes(); });
+  server.on("/api/node", HTTP_POST, []() { handleSelectNode(); });
+  server.on("/api/forget", HTTP_POST, []() { handleForget(); });
+  server.on("/api/scan", HTTP_POST, []() { handleScanReq(); });
   server.on("/api/time", HTTP_POST, []() { handleTime(); });
 
   static const char* kProbePaths[] = {
@@ -299,7 +382,9 @@ void loop() {
 
   dnsServer.processNextRequest();
   server.handleClient();
-  meshBridgeLoop();
+  // NOTE: the BLE bridge runs on its own core-0 task (tp_bridge). Do not call
+  // meshBridgeLoop() here: on multi-core chips that would invoke the BT
+  // controller from core 1 and trip the BTDM core-affinity assert.
 
   st.clients     = WiFi.softAPgetStationNum();
   st.bridgeState = meshBridgeStatus();

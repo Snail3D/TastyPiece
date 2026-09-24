@@ -46,9 +46,10 @@ static uint8_t  s_chIdx     = 0;
 static uint32_t s_lastPoll  = 0;
 static bool     s_wantPoll  = false;
 static uint32_t s_lastScanEnd = 0;
-static bool     s_matchValid  = false;
-static NimBLEAddress s_matchAddr;
-static String   s_matchName;
+static std::vector<MeshNodeInfo> s_found;   // scanned candidates
+static String   s_target;                  // pinned BLE address ("" = auto-pick)
+static String   s_peerAddr;                // address currently bridged
+static bool     s_scanRequest = false;     // force a scan next tick
 
 static bool     s_epochSet = false;
 static uint32_t s_epochBase = 0, s_epochAt = 0;
@@ -198,8 +199,9 @@ static void disconnectCB(NimBLEClient*) {
   s_secure    = false;
   s_rx = nullptr;
   s_tx = nullptr;
-  s_status = "scanning";
   s_peer = "";
+  s_peerAddr = "";
+  s_status = s_target.length() ? "connecting" : "scanning";
 }
 
 static void disconnectCB(NimBLEClient*);
@@ -228,15 +230,29 @@ class ClientCB : public NimBLEClientCallbacks {
 class ScanCB : public NimBLEAdvertisedDeviceCallbacks {
   void onResult(NimBLEAdvertisedDevice* dev) override {
     if (s_connecting || s_connected) return;
+    String addr = dev->getAddress().toString().c_str();
+    String name = dev->getName().c_str();
     bool svc = dev->isAdvertisingService(NimBLEUUID(SVC_UUID));
     bool nm  = dev->getName().find("MeshCore") != std::string::npos;
-    if (svc || nm) {
-      s_matchAddr  = dev->getAddress();
-      s_matchName  = dev->getName().c_str();
-      s_matchValid = true;
-      Serial.printf("[BRIDGE] found '%s' %s\n", dev->getName().c_str(),
-                    dev->getAddress().toString().c_str());
+    bool mc  = svc || nm;
+    for (auto& d : s_found) {                 // de-dup, refresh RSSI
+      if (d.address.equalsIgnoreCase(addr)) {
+        d.rssi = dev->getRSSI(); d.name = name; d.meshcore = mc; return;
+      }
     }
+    MeshNodeInfo info;
+    info.name    = name.isEmpty() ? addr : name;
+    info.address = addr;
+    info.rssi    = dev->getRSSI();
+    info.meshcore = mc;
+    s_found.push_back(info);
+    if (s_found.size() > 32) {            // never evict a mesh node
+      for (size_t i = 0; i < s_found.size(); i++) {
+        if (!s_found[i].meshcore) { s_found.erase(s_found.begin() + i); break; }
+      }
+      if (s_found.size() > 32) s_found.erase(s_found.begin());
+    }
+    if (mc) Serial.printf("[BRIDGE] found '%s' %s\n", info.name.c_str(), addr.c_str());
   }
 };
 
@@ -300,6 +316,7 @@ static bool connectToFoundDevice(const NimBLEAddress& addr, const String& name) 
   s_connected = true;
   s_connecting = false;
   s_status = "connected";
+  s_peerAddr = addr.toString().c_str();
   s_t0 = millis();
   s_initStage = 0;
   Serial.printf("[BRIDGE] paired + connected to '%s'\n", s_peer.c_str());
@@ -313,6 +330,7 @@ void meshBridgeBegin() {
   s_prefs.begin("tastypiece", false);
   uint32_t savedPin = s_prefs.getUInt("pin", 0);
   if (savedPin) s_pin = savedPin;
+  s_target = s_prefs.isKey("target") ? s_prefs.getString("target", "") : String("");
 
   NimBLEDevice::init("TastyPiece");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
@@ -343,23 +361,54 @@ static void bridgeTask(void* arg) {
 void meshBridgeLoop() {
   uint32_t now = millis();
 
-  // 1) not connected -> blocking scan, then connect by address
+  // 1) not connected -> scan, then connect to the chosen / strongest node
   if (!s_connected && !s_connecting) {
     if (s_needPin) {                       // wait for a PIN from the user
       s_status = "need_pin";
       vTaskDelay(pdMS_TO_TICKS(500));
       return;
     }
-    s_status = "scanning";
-    s_matchValid = false;
-    Serial.println("[BRIDGE] scanning 6s ...");
-    s_scan->start(6, false);          // seconds; blocks this task only
-    Serial.printf("[BRIDGE] scan done match=%d\n", (int)s_matchValid);
-    if (s_matchValid) {
-      s_scan->stop();
-      connectToFoundDevice(s_matchAddr, s_matchName);
+
+    s_status = s_target.length() ? "connecting" : "scanning";
+    s_found.clear();
+    s_scanRequest = false;
+    Serial.println("[BRIDGE] scanning 5s ...");
+    s_scan->start(5, false);          // seconds; blocks this task only
+    s_scan->stop();
+    Serial.printf("[BRIDGE] scan done: %u device(s)\n", (unsigned)s_found.size());
+    for (auto& d : s_found)
+      if (d.meshcore)
+        Serial.printf("[BRIDGE]   %-22s %-17s %4d dBm [meshcore]\n", d.name.c_str(),
+                      d.address.c_str(), d.rssi);
+
+    // Choose the node: explicit target first, else strongest MeshCore device.
+    const MeshNodeInfo* pick = nullptr;
+    if (s_target.length()) {
+      for (auto& d : s_found)
+        if (d.address.equalsIgnoreCase(s_target)) { pick = &d; break; }
+      if (!pick) {
+        s_status = "not_found";
+        Serial.printf("[BRIDGE] target %s not in range\n", s_target.c_str());
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        return;
+      }
+    } else {
+      for (auto& d : s_found)
+        if (d.meshcore && (!pick || d.rssi > pick->rssi)) pick = &d;
+      if (!pick) {                        // nothing suitable yet
+        vTaskDelay(pdMS_TO_TICKS(2500));
+        return;
+      }
     }
-    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    if (connectToFoundDevice(NimBLEAddress(pick->address.c_str()), pick->name)) {
+      if (!s_target.length()) {           // remember the auto-picked node
+        s_target = pick->address;
+        s_prefs.putString("target", s_target);
+      }
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(1500));
+    }
     return;
   }
 
@@ -453,7 +502,41 @@ void meshBridgeSetEpoch(uint32_t epochSeconds) {
 void meshBridgeSetPin(uint32_t pin) {
   s_pin = pin;
   s_needPin = false;
-  s_status = "scanning";
+  s_status = s_target.length() ? "connecting" : "scanning";
   s_prefs.putUInt("pin", pin);   // survive our own reboots
   if (s_client && s_client->isConnected()) s_client->disconnect();
+}
+
+// --- discovery / node picker ----------------------------------------------
+size_t meshBridgeNodeCount() { return s_found.size(); }
+
+bool meshBridgeNodeAt(size_t i, MeshNodeInfo& out) {
+  if (i >= s_found.size()) return false;
+  out = s_found[i];
+  return true;
+}
+
+String meshBridgeTarget() { return s_target; }
+
+void meshBridgeSetTarget(const String& address) {
+  s_target = address;
+  if (s_target.length()) s_prefs.putString("target", s_target);
+  else                   s_prefs.remove("target");
+  s_needPin = false;
+  if (s_client && s_client->isConnected() && !s_peerAddr.equalsIgnoreCase(address))
+    s_client->disconnect();
+  s_scanRequest = true;
+}
+
+void meshBridgeClearSelection() {
+  s_target   = "";
+  s_needPin  = false;
+  s_prefs.remove("target");
+  s_prefs.remove("pin");
+  if (s_client && s_client->isConnected()) s_client->disconnect();
+  s_scanRequest = true;
+}
+
+void meshBridgeRequestScan() {
+  if (!s_connected) s_scanRequest = true;
 }

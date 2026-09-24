@@ -10,7 +10,7 @@
 // SoftAP that phones join. Keep it short and friendly.
 #define TP_AP_SSID    "TastyPiece"
 #define TP_AP_PASS    "tastypiece"   // >= 8 chars; set "" for open AP
-#define TP_AP_CHANNEL 6
+#define TP_AP_CHANNEL 1
 #define TP_AP_IP      IPAddress(192, 168, 4, 1)
 #define TP_AP_GW      IPAddress(192, 168, 4, 1)
 #define TP_AP_MASK    IPAddress(255, 255, 255, 0)

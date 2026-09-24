@@ -49,6 +49,9 @@ main{padding:12px}.view{display:none}.view.active{display:block}
 .pair input{width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;color:var(--txt);
   padding:12px;font-size:20px;letter-spacing:5px;text-align:center;margin:8px 0}
 .pair button{width:100%;background:var(--accent);border:none;color:#08130a;font-weight:700;border-radius:12px;padding:12px}
+.mini{flex:1;background:var(--accent);border:none;color:#08130a;font-weight:700;border-radius:12px;padding:11px 16px;font-size:14px}
+.mini.ghost{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
+.rowbtn{display:flex;gap:8px;margin-top:8px}
 details{border:1px solid var(--line);border-radius:12px;margin-bottom:8px;background:var(--card);overflow:hidden}
 details summary{padding:12px;font-weight:600;cursor:pointer;list-style:none;display:flex;gap:8px}
 details summary::-webkit-details-marker{display:none}
@@ -76,6 +79,14 @@ nav button svg{width:22px;height:22px;fill:currentColor}nav button.on{color:var(
       <div class="sub">Type the PIN shown on the mesh node's screen.</div>
       <input id="pin" inputmode="numeric" maxlength="6" placeholder="000000">
       <button onclick="doPair()">Pair</button>
+    </div>
+    <div id="nodebox" class="card" style="display:none">
+      <h3>NEARBY NODES</h3>
+      <div id="nodelist"><div class="notice">Searching…</div></div>
+      <div class="rowbtn">
+        <button class="mini" onclick="rescan()">Rescan</button>
+        <button class="mini ghost" onclick="forgetNode()">Forget</button>
+      </div>
     </div>
     <div id="channels"></div>
     <div class="card">
@@ -105,6 +116,15 @@ nav button svg{width:22px;height:22px;fill:currentColor}nav button.on{color:var(
       <div class="kv"><span>Firmware</span><span id="n-ver">—</span></div>
       <div class="kv"><span>Battery</span><span id="n-batt">—</span></div>
       <div class="kv"><span>TX / RX</span><span id="n-counts">0 / 0</span></div>
+    </div>
+    <div class="card">
+      <h3>SELECTED NODE</h3>
+      <div class="kv"><span>Target</span><span id="n-target">—</span></div>
+      <div id="n-picker"><div class="notice">Searching…</div></div>
+      <div class="rowbtn">
+        <button class="mini" onclick="rescan()">Rescan</button>
+        <button class="mini ghost" onclick="forgetNode()">Forget</button>
+      </div>
     </div>
   </section>
 
@@ -143,7 +163,7 @@ nav button svg{width:22px;height:22px;fill:currentColor}nav button.on{color:var(
 
 <script>
 const $=id=>document.getElementById(id);
-let SEL=0, MESH={}, STATUS={}, timed=false;
+let SEL=0, MESH={}, STATUS={}, NODES={devices:[]}, timed=false;
 function tab(n){for(const v of['mesh','nodes','settings']){$('v-'+v).classList.toggle('active',v===n);$('t-'+v).classList.toggle('on',v===n);}poll();}
 function fmtUptime(s){s=+s||0;const h=(s/3600)|0,m=((s%3600)/60)|0,x=s%60;return (h?h+'h ':'')+(m?m+'m ':'')+x+'s';}
 function esc(t){return (t||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -194,15 +214,48 @@ function render(){
   $('s-batt').textContent=MESH.battery_mv?(MESH.battery_mv+' mV'):'—';
   $('s-bridge').textContent=bs;
   $('s-pair').textContent=bs==='connected'?'bonded':'not paired';
+  renderNodes(bs);
+}
+function renderNodes(bs){
+  bs = bs || (MESH.status||'');
+  const show = bs!=='connected';
+  $('nodebox').style.display = show ? 'block' : 'none';
+  const devs=NODES.devices||[];
+  const target=NODES.target||'';
+  let html = devs.length ? devs.map(d=>{
+    const sel = target && d.address && d.address.toLowerCase()===target.toLowerCase();
+    return `<div class="chat-tile ${sel?'sel':''}" onclick="pickNode('${d.address}')">
+      <div class="avatar">${d.meshcore?'&nbsp;':'·'}</div>
+      <div class="grow"><div>${esc(d.name)}${d.meshcore?'':' <span class="chip">not meshcore</span>'}</div>
+      <div class="sub">${esc(d.address)}</div></div>
+      <div class="chip">${d.rssi} dBm${sel?' · picked':''}</div></div>`;
+  }).join('') : '<div class="notice">No nodes yet — make sure the mesh node is powered on.</div>';
+  $('nodelist').innerHTML = html;
+  $('n-picker').innerHTML = html;
+  $('n-target').textContent = target || '(auto — strongest MeshCore)';
 }
 function sel(i){SEL=i;render();}
+function pickNode(addr){
+  fetch('/api/node',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({address:addr})}).catch(()=>{});
+  poll();
+}
+function forgetNode(){
+  fetch('/api/forget',{method:'POST'}).catch(()=>{});
+  poll();
+}
+function rescan(){
+  fetch('/api/scan',{method:'POST'}).catch(()=>{});
+  poll();
+}
 async function poll(){
   try{
-    const [s,m]=await Promise.all([
+    const [s,m,n]=await Promise.all([
       fetch('/api/status',{cache:'no-store'}).then(r=>r.json()),
-      fetch('/api/mesh',{cache:'no-store'}).then(r=>r.json())
+      fetch('/api/mesh',{cache:'no-store'}).then(r=>r.json()),
+      fetch('/api/nodes',{cache:'no-store'}).then(r=>r.json()).catch(()=>({devices:[]}))
     ]);
-    STATUS=s; MESH=m;
+    STATUS=s; MESH=m; NODES=n;
     if(!timed){timed=true;fetch('/api/time',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({epoch:Math.floor(Date.now()/1000)})}).catch(()=>{});}
     render();
