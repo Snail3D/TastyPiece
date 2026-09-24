@@ -55,6 +55,8 @@ static NimBLERemoteCharacteristic* s_mtFromnum = nullptr;  // notify
 
 static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
+static bool          s_paused     = false;   // user disconnected: don't auto-reconnect
+static MeshNodeInfo  s_lastPeer;             // last successfully connected node (for the locked UI)
 static volatile bool s_secure     = false;
 static volatile bool s_needPin    = false;
 static uint32_t s_pin = 123456;
@@ -512,7 +514,7 @@ static void disconnectCB(NimBLEClient*) {
   s_proto = "";
   s_mtConfigSent = false;
   s_mtDone = false;
-  s_status = s_target.length() ? "connecting" : "scanning";
+  s_status = s_paused ? "disconnected" : (s_target.length() ? "connecting" : "scanning");
 }
 
 static void bridgeTask(void* arg);
@@ -693,6 +695,19 @@ static void bridgeTask(void* arg) {
   }
 }
 
+static void scanForNodes() {
+  s_found.clear();
+  s_scanRequest = false;
+  Serial.println("[BRIDGE] scanning 5s ...");
+  s_scan->start(5, false);
+  s_scan->stop();
+  Serial.printf("[BRIDGE] scan done: %u device(s)\n", (unsigned)s_found.size());
+  for (auto& d : s_found)
+    if (!d.proto.isEmpty())
+      Serial.printf("[BRIDGE]   %-22s %-17s %4d dBm [%s]\n", d.name.c_str(),
+                    d.address.c_str(), d.rssi, d.proto.c_str());
+}
+
 void meshBridgeLoop() {
   uint32_t now = millis();
 
@@ -704,17 +719,16 @@ void meshBridgeLoop() {
       return;
     }
 
+    // user asked to disconnect: stay offline, only scan on demand for the picker
+    if (s_paused) {
+      s_status = "disconnected";
+      if (s_scanRequest) scanForNodes();
+      vTaskDelay(pdMS_TO_TICKS(1200));
+      return;
+    }
+
     s_status = s_target.length() ? "connecting" : "scanning";
-    s_found.clear();
-    s_scanRequest = false;
-    Serial.println("[BRIDGE] scanning 5s ...");
-    s_scan->start(5, false);
-    s_scan->stop();
-    Serial.printf("[BRIDGE] scan done: %u device(s)\n", (unsigned)s_found.size());
-    for (auto& d : s_found)
-      if (!d.proto.isEmpty())
-        Serial.printf("[BRIDGE]   %-22s %-17s %4d dBm [%s]\n", d.name.c_str(),
-                      d.address.c_str(), d.rssi, d.proto.c_str());
+    scanForNodes();
 
     const MeshNodeInfo* pick = nullptr;
     if (s_target.length()) {
@@ -733,6 +747,7 @@ void meshBridgeLoop() {
     }
 
     if (connectToFoundDevice(NimBLEAddress(pick->address.c_str()), pick->name)) {
+      s_lastPeer = *pick;
       if (!s_target.length()) {
         s_target = pick->address;
         s_prefs.putString("target", s_target);
@@ -882,7 +897,8 @@ bool meshBridgeNodeAt(size_t i, MeshNodeInfo& out) {
 String meshBridgeTarget() { return s_target; }
 
 void meshBridgeSetTarget(const String& address) {
-  s_target = address;
+  s_target   = address;
+  s_paused   = false;                 // picking a node resumes auto-connect
   if (s_target.length()) s_prefs.putString("target", s_target);
   else                   s_prefs.remove("target");
   s_needPin = false;
@@ -893,7 +909,9 @@ void meshBridgeSetTarget(const String& address) {
 
 void meshBridgeClearSelection() {
   s_target   = "";
+  s_paused   = false;
   s_needPin  = false;
+  s_lastPeer = MeshNodeInfo();
   s_prefs.remove("target");
   s_prefs.remove("pin");
   if (s_client && s_client->isConnected()) s_client->disconnect();
@@ -902,4 +920,39 @@ void meshBridgeClearSelection() {
 
 void meshBridgeRequestScan() {
   if (!s_connected) s_scanRequest = true;
+}
+
+bool meshBridgeLocked() {
+  return !s_paused && (s_connected || s_connecting || s_needPin);
+}
+
+bool meshBridgePeerInfo(MeshNodeInfo& out) {
+  if (s_lastPeer.address.length()) { out = s_lastPeer; return true; }
+  if (s_peerAddr.length() || s_peer.length()) {
+    out.address  = s_peerAddr;
+    out.name     = s_peer.length() ? s_peer : s_peerAddr;
+    out.proto    = s_proto;
+    out.meshcore = (s_proto == "meshcore");
+    return true;
+  }
+  return false;
+}
+
+void meshBridgeDisconnect() {
+  s_paused = true;                    // stay offline until the user picks again
+  s_needPin = false;
+  if (s_client) s_client->disconnect();
+  s_connected  = false;
+  s_connecting = false;
+  s_status     = "disconnected";
+  s_scanRequest = true;               // refresh the picker list
+  Serial.println("[BRIDGE] disconnected by user");
+}
+
+void meshBridgeReconnect() {
+  s_paused = false;
+  s_needPin = false;
+  s_status = s_target.length() ? "connecting" : "scanning";
+  s_scanRequest = true;
+  Serial.println("[BRIDGE] reconnect requested");
 }

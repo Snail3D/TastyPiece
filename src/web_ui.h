@@ -141,10 +141,6 @@ nav button svg{width:22px;height:22px;fill:currentColor}nav button.on{color:var(
       <h3>Choose a node</h3>
       <div class="kv"><span>Target</span><span id="n-target">—</span></div>
       <div id="n-picker"><div class="notice">Searching…</div></div>
-      <div class="rowbtn">
-        <button class="mini" onclick="rescan()">Rescan</button>
-        <button class="mini ghost" onclick="forgetNode()">Forget</button>
-      </div>
     </div>
   </section>
 
@@ -259,16 +255,37 @@ function render(){
   $('mesh-nodes').innerHTML=mn.length?mn.map(n=>`<div class="kv"><span>${esc(n.name||('!'+n.num))}</span>
     <span>${n.hops!=null?n.hops+' hop'+(n.hops===1?'':'s'):''}${n.snr!=null&&SET.snr?' · '+n.snr.toFixed(1)+'dB':''}${n.last_heard?' · '+ago(n.last_heard):''}${n.via_mqtt?' · MQTT':''}</span></div>`).join(''):'<div class="notice">No nodes reported (MeshCore may not expose a node list).</div>';
 
-  const devs=NODES.devices||[], target=NODES.target||'';
+  const devs=NODES.devices||[], target=NODES.target||'', locked=!!NODES.locked, pi=NODES.peer_info||null;
   $('n-target').textContent=target||'(auto — strongest mesh node)';
-  const picker=devs.length?devs.map(d=>{
-    const sel=target&&d.address&&d.address.toLowerCase()===target.toLowerCase();
-    return `<div class="chat-tile ${sel?'sel':''}" onclick="pickNode('${d.address}')">
-      <div class="avatar">${d.proto?'📡':'·'}</div>
-      <div class="grow"><div>${esc(d.name)} ${d.proto?'':'<span class="chip">not mesh</span>'}</div>
-      <div class="sub">${esc(d.address)}${d.proto?' · '+esc(d.proto):''}</div></div>
-      <div class="chip">${d.rssi} dBm${sel?' · picked':''}</div></div>`;}).join('')
-    :'<div class="notice">No nodes yet — is the mesh node powered on?</div>';
+  let picker='';
+  if(locked && pi && pi.address){
+    picker=`<div class="chat-tile sel">
+      <div class="avatar">🔒</div>
+      <div class="grow"><div>${esc(pi.name||pi.address)}</div>
+      <div class="sub">${esc(pi.address)}${pi.proto?' · '+esc(pi.proto):''} · connected</div></div>
+      <div class="chip">${pi.rssi?pi.rssi+' dBm':''}</div></div>
+      <div class="notice" style="margin-top:8px">Locked to this node. Disconnect to choose another — the selection stays saved.</div>
+      <div class="rowbtn" style="margin-top:8px">
+        <button class="mini" style="background:#f85149;color:#fff" onclick="disconnectNode()">Disconnect</button>
+        <button class="mini ghost" onclick="forgetNode()">Forget</button></div>`;
+  } else if(devs.length){
+    picker=devs.map(d=>{
+      const sel=target&&d.address&&d.address.toLowerCase()===target.toLowerCase();
+      return `<div class="chat-tile ${sel?'sel':''}" onclick="pickNode('${d.address}')">
+        <div class="avatar">${d.proto?'📡':'·'}</div>
+        <div class="grow"><div>${esc(d.name)} ${d.saved?'<span class="chip">saved</span>':''} ${d.proto?'':'<span class="chip">not mesh</span>'}</div>
+        <div class="sub">${esc(d.address)}${d.proto?' · '+esc(d.proto):''}</div></div>
+        <div class="chip">${d.rssi} dBm${sel?' · picked':''}</div></div>`;}).join('')
+      +`<div class="rowbtn" style="margin-top:8px">
+        <button class="mini" onclick="rescan()">Rescan</button>
+        ${target?'<button class="mini" onclick="reconnectNode()">Reconnect</button>':''}
+        <button class="mini ghost" onclick="forgetNode()">Forget</button></div>`;
+  } else {
+    picker='<div class="notice">No nodes yet — is the mesh node powered on?</div>'
+      +`<div class="rowbtn" style="margin-top:8px">
+        <button class="mini" onclick="rescan()">Rescan</button>
+        ${target?'<button class="mini" onclick="reconnectNode()">Reconnect</button>':''}</div>`;
+  }
   $('n-picker').innerHTML=picker;
 
   $('s-fw').textContent=(STATUS.fw||'TastyPiece')+' '+(STATUS.version||'');
@@ -281,7 +298,7 @@ function render(){
   if(SEL)renderThread();
 }
 function renderThread(){
-  const ms=(MESH.messages||[]).filter(m=>SEL.kind==='channel'?(m.kind==='channel'&&m.channel===SEL.id):(m.kind==='direct'&&m.from===SEL.id));
+  const ms=(MESH.messages||[]).filter(m=>SEL.kind==='channel'?(m.kind==='channel'&&String(m.channel)===String(SEL.id)):(m.kind==='direct'&&m.from===SEL.id));
   const view=ms.slice(-40);
   $('thread').innerHTML=view.length?view.map(m=>
     `<div class="msg ${m.out?'out':'in'}" style="${SET.compact?'font-size:13px;padding:6px 10px':''}">
@@ -314,7 +331,7 @@ async function doSend(ev){
   ev.preventDefault();
   const text=$('sendtext').value.trim(); if(!text||!SEL)return false;
   $('sendtext').value='';
-  const body=SEL.kind==='channel'?{channel:SEL.id,text}:{to:Number(SEL.id)||SEL.id,text};
+  const body=SEL.kind==='channel'?{channel:Number(SEL.id),text}:{to:Number(SEL.id)||SEL.id,text};
   await fetch('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(()=>{});
   poll();return false;
 }
@@ -323,6 +340,8 @@ async function doPair(){const pin=$('pin').value.trim();if(!pin)return;
 function pickNode(addr){fetch('/api/node',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:addr})}).catch(()=>{});poll();}
 function forgetNode(){fetch('/api/forget',{method:'POST'}).catch(()=>{});poll();}
 function rescan(){fetch('/api/scan',{method:'POST'}).catch(()=>{});poll();}
+function disconnectNode(){fetch('/api/disconnect',{method:'POST'}).catch(()=>{});poll();}
+function reconnectNode(){fetch('/api/reconnect',{method:'POST'}).catch(()=>{});poll();}
 
 // ---- hold-to-talk dictation ----
 let REC=null,recing=false;

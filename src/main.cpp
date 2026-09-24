@@ -189,16 +189,57 @@ static void handleNodes() {
   doc["status"]    = meshBridgeStatus();
   doc["target"]    = meshBridgeTarget();
   doc["connected"] = meshBridgeConnected();
+  doc["locked"]    = meshBridgeLocked();
   doc["peer"]      = meshBridgePeer();
+
+  MeshNodeInfo me;
+  bool havePeer = meshBridgePeerInfo(me);
+  if (havePeer) {
+    JsonObject p = doc["peer_info"].to<JsonObject>();
+    p["name"]    = me.name;
+    p["address"] = me.address;
+    p["rssi"]    = me.rssi;
+    p["proto"]   = me.proto;
+  }
+
   JsonArray arr = doc["devices"].to<JsonArray>();
-  for (size_t i = 0; i < meshBridgeNodeCount(); i++) {
-    MeshNodeInfo n;
-    if (!meshBridgeNodeAt(i, n)) break;
-    JsonObject d = arr.add<JsonObject>();
-    d["name"]     = n.name;
-    d["address"]  = n.address;
-    d["rssi"]     = n.rssi;
-    d["meshcore"] = n.meshcore;
+  if (meshBridgeLocked()) {
+    // Bound to a node: expose only that node, so the picker stays locked.
+    if (havePeer && me.address.length()) {
+      JsonObject d = arr.add<JsonObject>();
+      d["name"]     = me.name;
+      d["address"]  = me.address;
+      d["rssi"]     = me.rssi;
+      d["meshcore"] = me.meshcore;
+      d["proto"]    = me.proto;
+      d["saved"]    = true;
+    }
+  } else {
+    for (size_t i = 0; i < meshBridgeNodeCount(); i++) {
+      MeshNodeInfo n;
+      if (!meshBridgeNodeAt(i, n)) break;
+      JsonObject d = arr.add<JsonObject>();
+      d["name"]     = n.name;
+      d["address"]  = n.address;
+      d["rssi"]     = n.rssi;
+      d["meshcore"] = n.meshcore;
+      d["proto"]    = n.proto;
+    }
+    // keep the saved node visible even if it isn't in this scan
+    if (havePeer && me.address.length()) {
+      bool found = false;
+      for (JsonObject d : arr)
+        if (String(d["address"].as<const char*>()).equalsIgnoreCase(me.address)) { found = true; break; }
+      if (!found) {
+        JsonObject d = arr.add<JsonObject>();
+        d["name"]     = me.name;
+        d["address"]  = me.address;
+        d["rssi"]     = me.rssi;
+        d["meshcore"] = me.meshcore;
+        d["proto"]    = me.proto;
+        d["saved"]    = true;
+      }
+    }
   }
   String out;
   serializeJson(doc, out);
@@ -231,6 +272,18 @@ static void handleForget() {
 
 static void handleScanReq() {
   meshBridgeRequestScan();
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+static void handleDisconnect() {
+  meshBridgeDisconnect();
+  addEvent("disconnect");
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+static void handleReconnect() {
+  meshBridgeReconnect();
+  addEvent("reconnect");
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -286,6 +339,12 @@ static void handleSerialCmd(const String& line) {
   } else if (verb == "forget") {
     meshBridgeClearSelection();
     addEvent("node selection cleared");
+  } else if (verb == "disconnect") {
+    meshBridgeDisconnect();
+    addEvent("disconnect");
+  } else if (verb == "reconnect") {
+    meshBridgeReconnect();
+    addEvent("reconnect");
   } else if (verb == "selftest") {
     WiFiClient c;
     if (c.connect(WiFi.softAPIP(), 80)) {
@@ -377,6 +436,8 @@ void setup() {
   server.on("/api/node", HTTP_POST, []() { handleSelectNode(); });
   server.on("/api/forget", HTTP_POST, []() { handleForget(); });
   server.on("/api/scan", HTTP_POST, []() { handleScanReq(); });
+  server.on("/api/disconnect", HTTP_POST, []() { handleDisconnect(); });
+  server.on("/api/reconnect", HTTP_POST, []() { handleReconnect(); });
   server.on("/api/time", HTTP_POST, []() { handleTime(); });
 
   static const char* kProbePaths[] = {
