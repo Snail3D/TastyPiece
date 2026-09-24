@@ -114,3 +114,24 @@ Captive-portal probes (`/generate_204`, `/hotspot-detect.html`, `/connecttest.tx
   chunking.
 - **Live updates**: replace polling with WebSocket/SSE.
 - **Multi-node**: currently one node per gateway (one BLE link).
+
+## 3. Protocols
+
+TastyPiece auto-detects the node's protocol from its GATT services:
+
+| Node | Service | Transport |
+|---|---|---|
+| MeshCore | `6E400001-…` (NUS) | framed binary companion protocol |
+| Meshtastic | `6ba1b218-…` | protobuf `ToRadio`/`FromRadio` over TORADIO/FROMRADIO; `FROMNUM` = data-ready |
+
+Both share the same bridge state (`MeshMessage`, channel list, device info) so
+the web app is protocol-agnostic. Meshtastic adds a node DB (`MeshPeerInfo`:
+name / short name / hops / SNR / last heard) parsed from `node_info` frames.
+See `docs/PROTOCOLS.md` for the wire detail.
+
+## 4. Storage budget (light device)
+
+- Message ring: last 60 messages in RAM (shared vector).
+- Node DB: up to 80 peers.
+- Scan list: up to 32 devices (mesh nodes never evicted first).
+- No persistent message history; the phone keeps its own.
