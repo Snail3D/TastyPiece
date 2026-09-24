@@ -76,11 +76,27 @@ static void handleMesh() {
   JsonDocument doc;
   doc["connected"]  = meshBridgeConnected();
   doc["status"]     = meshBridgeStatus();
+  doc["protocol"]   = meshBridgeProtocol();
   doc["peer"]       = meshBridgePeer();
   doc["name"]       = meshBridgeDeviceName();
   doc["model"]      = meshBridgeModel();
   doc["version"]    = meshBridgeVersion();
   doc["battery_mv"] = meshBridgeBatteryMv();
+  doc["my_num"]     = meshBridgeMyNum();
+
+  JsonArray nodes = doc["mesh_nodes"].to<JsonArray>();
+  for (size_t i = 0; i < meshBridgePeerCount(); i++) {
+    MeshPeerInfo p;
+    if (!meshBridgePeerAt(i, p)) break;
+    JsonObject o = nodes.add<JsonObject>();
+    o["num"]        = p.num;
+    o["name"]       = p.longName.length() ? p.longName : (p.shortName.length() ? p.shortName : String(p.num));
+    o["short"]      = p.shortName;
+    o["snr"]        = p.snr;
+    o["hops"]       = p.hops;
+    o["last_heard"] = p.lastHeard;
+    o["via_mqtt"]   = p.viaMqtt;
+  }
 
   JsonArray chans = doc["channels"].to<JsonArray>();
   uint8_t nc = meshBridgeChannelCount();
@@ -131,10 +147,16 @@ static void handleSend() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"bad json\"}");
     return;
   }
-  uint8_t ch = doc["channel"] | 0;
   String text = doc["text"].as<String>();
   String err;
-  bool ok = meshBridgeSendChannel(ch, text, err);
+  bool ok;
+  if (doc["to"].is<uint32_t>()) {
+    uint32_t to = doc["to"].as<uint32_t>();
+    ok = meshBridgeSendDirect(to, text, err);
+  } else {
+    uint8_t ch = doc["channel"] | 0;
+    ok = meshBridgeSendChannel(ch, text, err);
+  }
   JsonDocument out;
   out["ok"] = ok;
   if (!ok) out["error"] = err;

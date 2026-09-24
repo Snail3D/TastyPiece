@@ -20,6 +20,18 @@ struct MeshNodeInfo {
   String address;
   int    rssi = 0;       // dBm
   bool   meshcore = false;
+  String proto;          // "meshcore" | "meshtastic" | ""
+};
+
+// A mesh node known from the connected node's node DB (Meshtastic).
+struct MeshPeerInfo {
+  uint32_t num = 0;
+  String   longName;
+  String   shortName;
+  float    snr = 0.0f;
+  uint32_t lastHeard = 0;
+  uint32_t hops = 0;
+  bool     viaMqtt = false;
 };
 
 // --- lifecycle -------------------------------------------------------------
@@ -37,6 +49,10 @@ uint16_t meshBridgeBatteryMv();
 uint8_t  meshBridgeChannelCount();
 String   meshBridgeChannelName(uint8_t idx);
 std::vector<MeshMessage>& meshBridgeMessages();
+String   meshBridgeProtocol();     // "meshcore" | "meshtastic" | ""
+size_t   meshBridgePeerCount();    // nodes in the connected node's DB
+bool     meshBridgePeerAt(size_t i, MeshPeerInfo& out);
+uint32_t meshBridgeMyNum();
 
 // --- discovery / node picker ----------------------------------------------
 size_t meshBridgeNodeCount();
@@ -48,5 +64,6 @@ void   meshBridgeRequestScan();                    // kick a scan on the next ti
 
 // --- actions ---------------------------------------------------------------
 bool meshBridgeSendChannel(uint8_t ch, const String& text, String& err);
+bool meshBridgeSendDirect(uint32_t dest, const String& text, String& err);
 void meshBridgeSetEpoch(uint32_t epochSeconds);
 void meshBridgeSetPin(uint32_t pin);
