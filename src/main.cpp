@@ -65,6 +65,7 @@ static void handleStatus() {
   doc["rx"]            = st.rxCount;
   doc["bridge"]        = st.bridgeState;
   doc["peer"]          = st.bridgePeer;
+  doc["heap"]          = ESP.getFreeHeap();
   doc["oled"]          = oledAvailable() ? oledBusInfo() : String("none");
   String out;
   serializeJson(doc, out);
