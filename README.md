@@ -1,5 +1,11 @@
 # TastyPiece
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-3FB950.svg)](LICENSE)
+[![Build: PlatformIO](https://img.shields.io/badge/build-PlatformIO-orange.svg)](platformio.ini)
+[![MeshCore: supported](https://img.shields.io/badge/MeshCore-supported-3FB950.svg)](docs/PROTOCOLS.md)
+[![Meshtastic: supported](https://img.shields.io/badge/Meshtastic-supported-3FB950.svg)](docs/PROTOCOLS.md)
+[![Source access](https://img.shields.io/badge/source%20access-%245-3FB950.svg)](https://buy.polar.sh/polar_cl_JKiVqefFRid6LfUoj8PzARYhBSHkqZGpkiI061JqyBR)
+
 **TastyPiece** turns a cheap ESP32 into a pocket mesh hotspot: it connects to a
 LoRa mesh node over Bluetooth and casts its own Wi-Fi access point serving a
 mobile web app — so anyone can read and send mesh messages **without installing
@@ -133,6 +139,28 @@ src/oled_status.*       optional status OLED
 src/config.h            build config
 docs/                   architecture, protocols, testing, receipt
 ```
+
+---
+
+## Docs
+
+| Document | What it covers |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | how the AP, captive portal, bridge task, and RAM budget fit together |
+| [`docs/PROTOCOLS.md`](docs/PROTOCOLS.md) | MeshCore companion framing and Meshtastic protobuf, side by side |
+| [`docs/MESHTASTIC-NODE-SETUP.md`](docs/MESHTASTIC-NODE-SETUP.md) | get a Meshtastic node onto BLE with `NO_PIN` |
+| [`docs/TESTING.md`](docs/TESTING.md) | flash-and-verify checklist for both protocols |
+| [`docs/RECEIPT.md`](docs/RECEIPT.md) | the printed setup receipt |
+| [`CHANGELOG.md`](CHANGELOG.md) | what changed, release by release |
+
+---
+
+## Get the source
+
+The gateway, both protocol transports, and the whole web app are available as a
+$5 source-access purchase (private repo invite, free updates by `git pull`):
+
+**<https://snail3d.com/lab/>** · direct checkout: <https://buy.polar.sh/polar_cl_JKiVqefFRid6LfUoj8PzARYhBSHkqZGpkiI061JqyBR>
 
 ---
 
