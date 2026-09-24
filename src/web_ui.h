@@ -75,6 +75,13 @@ nav button svg{width:22px;height:22px;fill:currentColor}nav button.on{color:var(
 .banner{background:#2a1f06;border:1px solid #5c4409;color:#e3b341;border-radius:12px;padding:10px;font-size:13px;margin-bottom:10px}
 [data-theme="light"] .banner{background:#fff8e1;color:#7a5b00}
 .hint{font-size:11px;color:var(--dim);text-align:center;padding:4px 0}
+.cfgrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.cfgrow small{display:block;color:var(--dim);font-size:12px;font-weight:400}
+.cfgrow .ctl{flex:0 0 auto;max-width:52%}
+.cfgrow select,.cfgrow input{background:#0d1117;color:inherit;border:1px solid var(--line);border-radius:8px;padding:5px 7px;font:inherit;max-width:100%}
+.cfgrow input[type=number]{width:110px}
+.cfgrow input[type=text]{width:170px}
+#cfg-groups details{margin:6px 0}#cfg-groups summary{font-weight:600;padding:8px 0;cursor:pointer}
 </style>
 </head>
 <body>
@@ -151,6 +158,10 @@ nav button svg{width:22px;height:22px;fill:currentColor}nav button.on{color:var(
       <input id="pin" inputmode="numeric" maxlength="6" placeholder="000000">
       <button onclick="doPair()">Pair</button>
     </div>
+    <details open id="meshcfg"><summary>⚙️ Node settings</summary>
+      <div class="sub" id="cfg-note">Loading node settings…</div>
+      <div id="cfg-groups"></div>
+    </details>
     <details open><summary>📱 App</summary>
       <div class="sw"><div>Dark theme<small>Match your phone or force dark</small></div><div id="sw-theme" class="tog" onclick="toggleTheme()"></div></div>
       <div class="sw"><div>Notification sound<small>On new messages</small></div><div id="sw-sound" class="tog on" onclick="toggle('sound')"></div></div>
@@ -189,8 +200,10 @@ nav button svg{width:22px;height:22px;fill:currentColor}nav button.on{color:var(
 </nav>
 
 <script>
+/* Meshtastic settings schema (generated from meshtastic/protobufs). */
+const MT_SCHEMA=/*MTSCHEMA_START*/{"config":[{"id":0,"n":"Device","flds":[{"f":1,"k":"role","kind":5,"en":17},{"f":2,"k":"serial_enabled","kind":0},{"f":4,"k":"button_gpio","kind":1},{"f":5,"k":"buzzer_gpio","kind":1},{"f":6,"k":"rebroadcast_mode","kind":5,"en":15},{"f":7,"k":"node_info_broadcast_secs","kind":1},{"f":8,"k":"double_tap_as_button_press","kind":0},{"f":9,"k":"is_managed","kind":0},{"f":10,"k":"disable_triple_click","kind":0},{"f":11,"k":"tzdef","kind":4},{"f":12,"k":"led_heartbeat_disabled","kind":0},{"f":13,"k":"buzzer_mode","kind":5,"en":2}]},{"id":1,"n":"Position","flds":[{"f":1,"k":"position_broadcast_secs","kind":1},{"f":2,"k":"position_broadcast_smart_enabled","kind":0},{"f":3,"k":"fixed_position","kind":0},{"f":4,"k":"gps_enabled","kind":0},{"f":5,"k":"gps_update_interval","kind":1},{"f":6,"k":"gps_attempt_time","kind":1},{"f":7,"k":"position_flags","kind":1},{"f":8,"k":"rx_gpio","kind":1},{"f":9,"k":"tx_gpio","kind":1},{"f":10,"k":"broadcast_smart_minimum_distance","kind":1},{"f":11,"k":"broadcast_smart_minimum_interval_secs","kind":1},{"f":12,"k":"gps_en_gpio","kind":1},{"f":13,"k":"gps_mode","kind":5,"en":8}]},{"id":2,"n":"Power","flds":[{"f":1,"k":"is_power_saving","kind":0},{"f":2,"k":"on_battery_shutdown_after_secs","kind":1},{"f":3,"k":"adc_multiplier_override","kind":3},{"f":4,"k":"wait_bluetooth_secs","kind":1},{"f":6,"k":"sds_secs","kind":1},{"f":7,"k":"ls_secs","kind":1},{"f":8,"k":"min_wake_secs","kind":1},{"f":9,"k":"device_battery_ina_address","kind":1},{"f":32,"k":"powermon_enables","kind":1}]},{"id":3,"n":"Network","flds":[{"f":1,"k":"wifi_enabled","kind":0},{"f":3,"k":"wifi_ssid","kind":4},{"f":4,"k":"wifi_psk","kind":4},{"f":5,"k":"ntp_server","kind":4},{"f":6,"k":"eth_enabled","kind":0},{"f":7,"k":"address_mode","kind":5,"en":0},{"f":9,"k":"rsyslog_server","kind":4},{"f":10,"k":"enabled_protocols","kind":1},{"f":11,"k":"ipv6_enabled","kind":0}]},{"id":4,"n":"Display","flds":[{"f":1,"k":"screen_on_secs","kind":1},{"f":2,"k":"gps_format","kind":5,"en":4},{"f":3,"k":"auto_screen_carousel_secs","kind":1},{"f":4,"k":"compass_north_top","kind":0},{"f":5,"k":"flip_screen","kind":0},{"f":6,"k":"units","kind":5,"en":6},{"f":7,"k":"oled","kind":5,"en":12},{"f":8,"k":"displaymode","kind":5,"en":5},{"f":9,"k":"heading_bold","kind":0},{"f":10,"k":"wake_on_tap_or_motion","kind":0},{"f":11,"k":"compass_orientation","kind":5,"en":3},{"f":12,"k":"use_12h_clock","kind":0},{"f":13,"k":"use_long_node_name","kind":0},{"f":14,"k":"enable_message_bubbles","kind":0}]},{"id":5,"n":"LoRa","flds":[{"f":1,"k":"use_preset","kind":0},{"f":2,"k":"modem_preset","kind":5,"en":11},{"f":3,"k":"bandwidth","kind":1},{"f":4,"k":"spread_factor","kind":1},{"f":5,"k":"coding_rate","kind":1},{"f":6,"k":"frequency_offset","kind":3},{"f":7,"k":"region","kind":5,"en":16},{"f":8,"k":"hop_limit","kind":1},{"f":9,"k":"tx_enabled","kind":0},{"f":10,"k":"tx_power","kind":2},{"f":11,"k":"channel_num","kind":1},{"f":12,"k":"override_duty_cycle","kind":0},{"f":13,"k":"sx126x_rx_boosted_gain","kind":0},{"f":14,"k":"override_frequency","kind":3},{"f":15,"k":"pa_fan_disabled","kind":0},{"f":103,"k":"ignore_incoming","kind":1,"rep":1},{"f":104,"k":"ignore_mqtt","kind":0},{"f":105,"k":"config_ok_to_mqtt","kind":0},{"f":106,"k":"fem_lna_mode","kind":5,"en":7},{"f":107,"k":"serial_hal_only","kind":0}]},{"id":6,"n":"Bluetooth","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"mode","kind":5,"en":14},{"f":3,"k":"fixed_pin","kind":1}]},{"id":7,"n":"Security","flds":[{"f":1,"k":"public_key","kind":4},{"f":2,"k":"private_key","kind":4},{"f":3,"k":"admin_key","kind":4,"rep":1},{"f":4,"k":"is_managed","kind":0},{"f":5,"k":"serial_enabled","kind":0},{"f":6,"k":"debug_log_api_enabled","kind":0},{"f":8,"k":"admin_channel_enabled","kind":0},{"f":9,"k":"packet_signature_policy","kind":5,"en":13}]},{"id":8,"n":"Sessionkey","flds":[]}],"module":[{"id":0,"n":"MQTT","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"address","kind":4},{"f":3,"k":"username","kind":4},{"f":4,"k":"password","kind":4},{"f":5,"k":"encryption_enabled","kind":0},{"f":6,"k":"json_enabled","kind":0},{"f":7,"k":"tls_enabled","kind":0},{"f":8,"k":"root","kind":4},{"f":9,"k":"proxy_to_client_enabled","kind":0},{"f":10,"k":"map_reporting_enabled","kind":0}]},{"id":1,"n":"Serial","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"echo","kind":0},{"f":3,"k":"rxd","kind":1},{"f":4,"k":"txd","kind":1},{"f":5,"k":"baud","kind":5,"en":18},{"f":6,"k":"timeout","kind":1},{"f":7,"k":"mode","kind":5,"en":19},{"f":8,"k":"override_console_serial_port","kind":0}]},{"id":2,"n":"ExternalNotification","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"output_ms","kind":1},{"f":3,"k":"output","kind":1},{"f":8,"k":"output_vibra","kind":1},{"f":9,"k":"output_buzzer","kind":1},{"f":4,"k":"active","kind":0},{"f":5,"k":"alert_message","kind":0},{"f":10,"k":"alert_message_vibra","kind":0},{"f":11,"k":"alert_message_buzzer","kind":0},{"f":6,"k":"alert_bell","kind":0},{"f":12,"k":"alert_bell_vibra","kind":0},{"f":13,"k":"alert_bell_buzzer","kind":0},{"f":7,"k":"use_pwm","kind":0},{"f":14,"k":"nag_timeout","kind":1},{"f":15,"k":"use_i2s_as_buzzer","kind":0}]},{"id":3,"n":"StoreForward","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"heartbeat","kind":0},{"f":3,"k":"records","kind":1},{"f":4,"k":"history_return_max","kind":1},{"f":5,"k":"history_return_window","kind":1},{"f":6,"k":"is_server","kind":0}]},{"id":4,"n":"RangeTest","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"sender","kind":1},{"f":3,"k":"save","kind":0},{"f":4,"k":"clear_on_reboot","kind":0}]},{"id":5,"n":"Telemetry","flds":[{"f":1,"k":"device_update_interval","kind":1},{"f":2,"k":"environment_update_interval","kind":1},{"f":3,"k":"environment_measurement_enabled","kind":0},{"f":4,"k":"environment_screen_enabled","kind":0},{"f":5,"k":"environment_display_fahrenheit","kind":0},{"f":6,"k":"air_quality_enabled","kind":0},{"f":7,"k":"air_quality_interval","kind":1},{"f":8,"k":"power_measurement_enabled","kind":0},{"f":9,"k":"power_update_interval","kind":1},{"f":10,"k":"power_screen_enabled","kind":0},{"f":11,"k":"health_measurement_enabled","kind":0},{"f":12,"k":"health_update_interval","kind":1},{"f":13,"k":"health_screen_enabled","kind":0},{"f":14,"k":"device_telemetry_enabled","kind":0},{"f":15,"k":"air_quality_screen_enabled","kind":0}]},{"id":6,"n":"CannedMessage","flds":[{"f":1,"k":"rotary1_enabled","kind":0},{"f":2,"k":"inputbroker_pin_a","kind":1},{"f":3,"k":"inputbroker_pin_b","kind":1},{"f":4,"k":"inputbroker_pin_press","kind":1},{"f":5,"k":"inputbroker_event_cw","kind":5,"en":10},{"f":6,"k":"inputbroker_event_ccw","kind":5,"en":10},{"f":7,"k":"inputbroker_event_press","kind":5,"en":10},{"f":8,"k":"updown1_enabled","kind":0},{"f":9,"k":"enabled","kind":0},{"f":10,"k":"allow_input_source","kind":4},{"f":11,"k":"send_bell","kind":0}]},{"id":7,"n":"Audio","flds":[{"f":1,"k":"codec2_enabled","kind":0},{"f":2,"k":"ptt_pin","kind":1},{"f":3,"k":"bitrate","kind":5,"en":1},{"f":4,"k":"i2s_ws","kind":1},{"f":5,"k":"i2s_sd","kind":1},{"f":6,"k":"i2s_din","kind":1},{"f":7,"k":"i2s_sck","kind":1}]},{"id":8,"n":"RemoteHardware","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"allow_undefined_pin_access","kind":0}]},{"id":9,"n":"NeighborInfo","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"update_interval","kind":1},{"f":3,"k":"transmit_over_lora","kind":0}]},{"id":10,"n":"AmbientLighting","flds":[{"f":1,"k":"led_state","kind":0},{"f":2,"k":"current","kind":1},{"f":3,"k":"red","kind":1},{"f":4,"k":"green","kind":1},{"f":5,"k":"blue","kind":1}]},{"id":11,"n":"DetectionSensor","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"minimum_broadcast_secs","kind":1},{"f":3,"k":"state_broadcast_secs","kind":1},{"f":4,"k":"send_bell","kind":0},{"f":5,"k":"name","kind":4},{"f":6,"k":"monitor_pin","kind":1},{"f":7,"k":"detection_trigger_type","kind":5,"en":20},{"f":8,"k":"use_pullup","kind":0}]},{"id":12,"n":"Paxcounter","flds":[{"f":1,"k":"enabled","kind":0},{"f":2,"k":"paxcounter_update_interval","kind":1},{"f":3,"k":"wifi_threshold","kind":2},{"f":4,"k":"ble_threshold","kind":2}]}],"channel":[{"f":1,"k":"channel_num","kind":1},{"f":2,"k":"psk","kind":4},{"f":3,"k":"name","kind":4},{"f":5,"k":"uplink_enabled","kind":0},{"f":6,"k":"downlink_enabled","kind":0},{"f":8,"k":"use_aead","kind":0}],"owner":[{"f":1,"k":"id","kind":4},{"f":2,"k":"long_name","kind":4},{"f":3,"k":"short_name","kind":4},{"f":4,"k":"macaddr","kind":4},{"f":5,"k":"hw_model","kind":5,"en":9},{"f":6,"k":"is_licensed","kind":0},{"f":7,"k":"role","kind":5,"en":17},{"f":8,"k":"public_key","kind":4},{"f":9,"k":"is_unmessagable","kind":0,"rep":1}],"enums":[{"name":"Addressmode","v":[0,1],"l":["Dhcp","Static"]},{"name":"Audio Baud","v":[0,1,2,3,4,5,6,7,8,9,10],"l":["Codec2 Default","Codec2 3200","Codec2 2400","Codec2 1600","Codec2 1400","Codec2 1300","Codec2 1200","Codec2 700","Codec2 700b","Codec2 700c","Codec2 450"]},{"name":"Buzzermode","v":[0,1,2,3,4],"l":["All Enabled","Disabled","Notifications Only","System Only","Direct Msg Only"]},{"name":"Compassorientation","v":[0,1,2,3,4,5,6,7],"l":["Degrees 0","Degrees 90","Degrees 180","Degrees 270","Degrees 0 Inverted","Degrees 90 Inverted","Degrees 180 Inverted","Degrees 270 Inverted"]},{"name":"Deprecatedgpscoordinateformat","v":[0],"l":["Unused"]},{"name":"Displaymode","v":[0,1,2,3],"l":["Default","Twocolor","Inverted","Color"]},{"name":"Displayunits","v":[0,1],"l":["Metric","Imperial"]},{"name":"Fem Lna Mode","v":[0,1,2],"l":["Disabled","Enabled","Not Present"]},{"name":"Gpsmode","v":[0,1,2],"l":["Disabled","Enabled","Not Present"]},{"name":"Hardwaremodel","v":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,255],"l":["Unset","Tlora V2","Tlora V1","Tlora V2 1 1p6","Tbeam","Heltec V2 0","Tbeam V0p7","T Echo","Tlora V1 1p3","Rak4631","Heltec V2 1","Heltec V1","Lilygo Tbeam S3 Core","Rak11200","Nano G1","Tlora V2 1 1p8","Tlora T3 S3","Nano G1 Explorer","Nano G2 Ultra","Lora Type","Wiphone","Wio Wm1110","Rak2560","Heltec Hru 3601","Heltec Wireless Bridge","Station G1","Rak11310","Makerfabs Tracker","Makerfabs Reserved","Canaryone","Rp2040 Lora","Station G2","Lora Relay V1","T Echo Plus","Ppr","Genieblocks","Nrf52 Unknown","Portduino","Android Sim","Diy V1","Nrf52840 Pca10059","Dr Dev","M5stack","Heltec V3","Heltec Wsl V3","Betafpv 2400 Tx","Betafpv 900 Nano Tx","Rpi Pico","Heltec Wireless Tracker","Heltec Wireless Paper","T Deck","T Watch S3","Picomputer S3","Heltec Ht62","Ebyte Esp32 S3","Esp32 S3 Pico","Chatter 2","Heltec Wireless Paper V1 0","Heltec Wireless Tracker V1 0","Unphone","Td Lorac","Cdebyte Eora S3","Twc Mesh V4","Nrf52 Promicro Diy","Radiomaster 900 Bandit Nano","Heltec Capsule Sensor V3","Heltec Vision Master T190","Heltec Vision Master E213","Heltec Vision Master E290","Heltec Mesh Node T114","Sensecap Indicator","Tracker T1000 E","Rak3172","Wio E5","Radiomaster 900 Bandit","Me25ls01 4y10td","Rp2040 Feather Rfm95","M5stack Corebasic","M5stack Core2","Rpi Pico2","M5stack Cores3","Seeed Xiao S3","Ms24sf1","Tlora C6","Wismesh Tap","Routastic","Mesh Tab","Meshlink","Xiao Nrf52 Kit","Thinknode M1","Thinknode M2","T Eth Elite","Heltec Sensor Hub","Muzi Base","Heltec Mesh Pocket","Seeed Solar Node","Nomadstar Meteor Pro","Crowpanel","Link 32","Seeed Wio Tracker L1","Seeed Wio Tracker L1 Eink","Muzi R1 Neo","T Deck Pro","T Lora Pager","M5stack Reserved","Wismesh Tag","Rak3312","Thinknode M5","Heltec Mesh Solar","T Echo Lite","Heltec V4","M5stack C6l","M5stack Cardputer Adv","Heltec Wireless Tracker V2","T Watch Ultra","Thinknode M3","Wismesh Tap V2","Rak3401","Rak6421","Thinknode M4","Thinknode M6","Meshstick 1262","Tbeam 1 Watt","T5 S3 Epaper Pro","Tbeam Bpf","Mini Epaper S3","Tdisplay S3 Pro","Heltec Mesh Node T096","Mesh Tracker X1","Thinknode M7","Thinknode M8","Thinknode M9","Heltec V4 R8","Heltec Mesh Node T1","Station G3","T Impulse Plus","T Echo Card","Seeed Wio Tracker L2","Crowpanel P4","Heltec Mesh Tower V2","Meshnology W10","Heltec Rc32","Heltec Rc52","Heltec Rcc6","Seeed Wio Tracker L1 Pro 1w","Meshnology W12","Meshpager X2","T Connect Pro","Axiometa Genesis Mini","Private Hw"]},{"name":"Inputeventchar","v":[0,10,17,18,19,20,24,27],"l":["None","Select","Up","Down","Left","Right","Cancel","Back"]},{"name":"Modempreset","v":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"l":["Long Fast","Long Slow","Very Long Slow","Medium Slow","Medium Fast","Short Slow","Short Fast","Long Moderate","Short Turbo","Long Turbo","Lite Fast","Lite Slow","Narrow Fast","Narrow Slow","Tiny Fast","Tiny Slow","Medium Turbo"]},{"name":"Oledtype","v":[0,1,2,3,4,5],"l":["Oled Auto","Oled Ssd1306","Oled Sh1106","Oled Sh1107","Oled Sh1107 128 128","Oled Sh1107 Rotated"]},{"name":"Packetsignaturepolicy","v":[0,1,2],"l":["Packet Signature Policy Compatible","Packet Signature Policy Balanced","Packet Signature Policy Strict"]},{"name":"Pairingmode","v":[0,1,2],"l":["Random Pin","Fixed Pin","No Pin"]},{"name":"Rebroadcastmode","v":[0,1,2,3,4,5],"l":["All","All Skip Decoding","Local Only","Known Only","None","Core Portnums Only"]},{"name":"Regioncode","v":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37],"l":["Unset","Us","Eu 433","Eu 868","Cn","Jp","Anz","Kr","Tw","Ru","In","Nz 865","Th","Lora 24","Ua 433","Ua 868","My 433","My 919","Sg 923","Ph 433","Ph 868","Ph 915","Anz 433","Kz 433","Kz 863","Np 865","Br 902","Itu1 2m","Itu2 2m","Eu 866","Eu 874","Eu 917","Eu N 868","Itu3 2m","Itu1 70cm","Itu2 70cm","Itu3 70cm","Itu2 125cm"]},{"name":"Role","v":[0,1,2,3,4,5,6,7,8,9,10,11,12],"l":["Client","Client Mute","Router","Router Client","Repeater","Tracker","Sensor","Tak","Client Hidden","Lost And Found","Tak Tracker","Router Late","Client Base"]},{"name":"Serial Baud","v":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],"l":["Baud Default","Baud 110","Baud 300","Baud 600","Baud 1200","Baud 2400","Baud 4800","Baud 9600","Baud 19200","Baud 38400","Baud 57600","Baud 115200","Baud 230400","Baud 460800","Baud 576000","Baud 921600"]},{"name":"Serial Mode","v":[0,1,2,3,4,5,6,7,8,9,10],"l":["Default","Simple","Proto","Textmsg","Nmea","Caltopo","Ws85","Ve Direct","Ms Config","Log","Logtext"]},{"name":"Triggertype","v":[0,1,2,3,4,5],"l":["Logic Low","Logic High","Falling Edge","Rising Edge","Either Edge Active Low","Either Edge Active High"]}]}/*MTSCHEMA_END*/;
 const $=id=>document.getElementById(id);
-let STATUS={},MESH={},NODES={devices:[]},SEL=null,timed=false,lastMsgCount=-1;
+let STATUS={},MESH={},NODES={devices:[]},SETTINGS={ready:false},SEL=null,timed=false,lastMsgCount=-1;
 const LS=(k,v)=>v===undefined?localStorage.getItem('tp_'+k):localStorage.setItem('tp_'+k,v);
 let SET={sound:LS('sound')!=='0',snr:LS('snr')!=='0',compact:LS('compact')==='1',theme:LS('theme')||'dark',lang:LS('lang')||'en-US'};
 
@@ -296,6 +309,7 @@ function render(){
   $('s-kept').textContent=(MESH.messages||[]).length+' in RAM';
 
   if(SEL)renderThread();
+  renderSettings();
 }
 function renderThread(){
   const ms=(MESH.messages||[]).filter(m=>SEL.kind==='channel'?(m.kind==='channel'&&String(m.channel)===String(SEL.id)):(m.kind==='direct'&&m.from===SEL.id));
@@ -308,14 +322,74 @@ function renderThread(){
   const box=$('thread'); if(box)box.scrollIntoView&&0;
 }
 
+function pretty(k){return k.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
+function cfgLookup(scope,type,key){
+  if(scope===0)return ((SETTINGS.config||{})[type]||{})[key];
+  if(scope===1)return ((SETTINGS.module||{})[type]||{})[key];
+  if(scope===2)return ((SETTINGS.channel||{})[type]||{})[key];
+  if(scope===3)return (SETTINGS.owner||{})[key];
+}
+function cfgRow(scope,type,fd){
+  const v=cfgLookup(scope,type,fd.k), name=pretty(fd.k);
+  if(fd.kind===0){
+    const on=(v===1||v==='1'||v===true);
+    return `<div class="cfgrow"><div>${name}</div><div class="ctl"><div class="tog ${on?'on':''}" onclick="setCfg(${scope},${type},${fd.f},${on?0:1})"></div></div></div>`;
+  }
+  if(fd.kind===5){
+    const e=MT_SCHEMA.enums[fd.en]||{v:[],l:[]}, cur=(v===undefined?e.v[0]:Number(v));
+    return `<div class="cfgrow"><div>${name}</div><div class="ctl"><select onchange="setCfg(${scope},${type},${fd.f},this.value)">${e.v.map((val,i)=>`<option value="${val}" ${val===cur?'selected':''}>${esc(e.l[i])}</option>`).join('')}</select></div></div>`;
+  }
+  if(fd.kind===1||fd.kind===2||fd.kind===3){
+    const cur=(v===undefined?0:v);
+    return `<div class="cfgrow"><div>${name}</div><div class="ctl"><input type="number" value="${cur}" onchange="setCfg(${scope},${type},${fd.f},this.value)"></div></div>`;
+  }
+  const cur=(v===undefined?'':v);
+  return `<div class="cfgrow"><div>${name}</div><div class="ctl"><input type="text" value="${esc(String(cur))}" onchange="setCfg(${scope},${type},${fd.f},this.value)"></div></div>`;
+}
+function cfgGroup(label,rows,open){
+  const body=Array.isArray(rows)?rows.join(''):(rows||'');
+  return body?`<details ${open?'open':''}><summary>${esc(label)}</summary>${body}</details>`:'';
+}
+function renderSettings(){
+  const note=$('cfg-note'), box=$('cfg-groups');
+  if(!note||!box)return;
+  const proto=MESH.protocol||'';
+  if(proto!=='meshtastic'){
+    note.textContent=(proto==='meshcore')?'Node settings currently apply to Meshtastic nodes. MeshCore settings are on the way.':'Connect to a Meshtastic node to edit its settings here.';
+    box.innerHTML='';return;
+  }
+  if(!SETTINGS.ready){note.textContent='Reading settings from the node…';box.innerHTML='';return;}
+  note.textContent='Edits are written straight to the node.';
+  let html='';
+  html+=cfgGroup('👤 Owner',(MT_SCHEMA.owner||[]).map(fd=>cfgRow(3,0,fd)),true);
+  (MT_SCHEMA.config||[]).forEach(g=>{if((SETTINGS.config||{})[g.id]===undefined)return;
+    html+=cfgGroup('🔧 '+pretty(g.n),g.flds.map(fd=>cfgRow(0,g.id,fd)),false);});
+  (MT_SCHEMA.module||[]).forEach(g=>{if((SETTINGS.module||{})[g.id]===undefined)return;
+    html+=cfgGroup('🧩 '+pretty(g.n),g.flds.map(fd=>cfgRow(1,g.id,fd)),false);});
+  const chs=SETTINGS.channel||{};
+  Object.keys(chs).forEach(i=>{
+    const role=Number(chs[i].role||0), rl=['Disabled','Primary','Secondary'][role]||role;
+    const rows=`<div class="cfgrow"><div>Role</div><div class="ctl"><span class="chip">${rl}</span></div></div>`+
+      (MT_SCHEMA.channel||[]).map(fd=>cfgRow(2,Number(i),fd)).join('');
+    html+=cfgGroup('📶 Channel '+i,rows,false);
+  });
+  box.innerHTML=html;
+}
+async function setCfg(scope,type,field,value){
+  try{await fetch('/api/setting',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({scope:scope,type:type,field:field,value:String(value)})});}catch(e){}
+  poll();
+}
+
 async function poll(){
   try{
-    const [s,m,n]=await Promise.all([
+    const [s,m,n,st]=await Promise.all([
       fetch('/api/status',{cache:'no-store'}).then(r=>r.json()),
       fetch('/api/mesh',{cache:'no-store'}).then(r=>r.json()),
-      fetch('/api/nodes',{cache:'no-store'}).then(r=>r.json()).catch(()=>({devices:[]}))
+      fetch('/api/nodes',{cache:'no-store'}).then(r=>r.json()).catch(()=>({devices:[]})),
+      fetch('/api/settings',{cache:'no-store'}).then(r=>r.json()).catch(()=>({ready:false}))
     ]);
-    STATUS=s;MESH=m;NODES=n;
+    STATUS=s;MESH=m;NODES=n;SETTINGS=st;
     if(!timed){timed=true;fetch('/api/time',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({epoch:Math.floor(Date.now()/1000)})}).catch(()=>{});}
     const c=(MESH.messages||[]).length;

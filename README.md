@@ -14,6 +14,15 @@ the vendor app**.
 Join the `TastyPiece` Wi-Fi network, open the captive portal, and you're on the
 mesh. No accounts, no app store, no internet.
 
+## Node settings
+
+The Settings tab mirrors the vendor apps: device role, LoRa region/preset/hop
+limit/TX power, channels (name + PSK), position, power, display, Bluetooth,
+security, and all the module configs (MQTT, telemetry, telemetry, store &
+forward, range test, canned messages, and more). It reads them from the node
+and writes changes straight back over Bluetooth. See [docs/SETTINGS.md](docs/SETTINGS.md).
+
+
 ```
         phone / tablet                ESP32 (TastyPiece)             LoRa mesh node
    ┌───────────────────────┐      ┌────────────────────────┐      ┌──────────────────┐

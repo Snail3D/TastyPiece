@@ -66,6 +66,14 @@ bool   meshBridgePeerInfo(MeshNodeInfo& out);      // info for the connected / l
 void   meshBridgeDisconnect();                     // drop link, keep saved target, stop auto-reconnect
 void   meshBridgeReconnect();                      // resume connecting to the saved target
 
+// --- settings (Meshtastic admin) -------------------------------------------
+bool   meshBridgeSettingsReady();
+void   meshBridgeRequestSettings();
+String meshBridgeConfigJson();                     // config/module/channel/owner snapshot
+bool   meshBridgeApplySetting(uint8_t scope, uint8_t type, uint8_t field,
+                              const String& value, String& err);
+void   meshBridgeRequestOwner();
+
 // --- actions ---------------------------------------------------------------
 bool meshBridgeSendChannel(uint8_t ch, const String& text, String& err);
 bool meshBridgeSendDirect(uint32_t dest, const String& text, String& err);

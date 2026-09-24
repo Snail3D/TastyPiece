@@ -1,5 +1,6 @@
 #include "mesh_bridge.h"
 #include "config.h"
+#include "mt_settings_gen.h"
 
 #include <NimBLEDevice.h>
 #include <Preferences.h>
@@ -221,6 +222,314 @@ static void upsertPeer(const MeshPeerInfo& in) {
 }
 
 // ---------------------------------------------------------------------------
+// Meshtastic settings: Config / ModuleConfig / Channel / Owner over AdminMessage
+// ---------------------------------------------------------------------------
+static bool mtWriteToRadio(const std::vector<uint8_t>& frame);
+
+#define MT_CFG_SLOTS 10   // ConfigType 0..9
+#define MT_MOD_SLOTS 17   // ModuleConfigType 0..16
+#define MT_BLOB_MAX  160
+
+static uint8_t  s_cfgBuf[MT_CFG_SLOTS][MT_BLOB_MAX];
+static uint16_t s_cfgLen[MT_CFG_SLOTS] = {0};
+static bool     s_cfgHave[MT_CFG_SLOTS] = {false};
+static uint8_t  s_modBuf[MT_MOD_SLOTS][MT_BLOB_MAX];
+static uint16_t s_modLen[MT_MOD_SLOTS] = {0};
+static bool     s_modHave[MT_MOD_SLOTS] = {false};
+static uint8_t  s_chBuf[8][MT_BLOB_MAX];
+static uint16_t s_chLen[8] = {0};
+static bool     s_chHave[8] = {false};
+static uint8_t  s_ownerBuf[MT_BLOB_MAX];
+static uint16_t s_ownerLen = 0;
+static bool     s_ownerHave = false;
+static uint8_t  s_reqStage = 0;      // 0..35 request sweep, 200 = done
+static uint32_t s_lastOwnerReq = 0;
+static bool     s_settingsReady = false;
+
+static const MtFieldDef* mtFindField(uint8_t scope, uint8_t type, uint8_t field) {
+  for (uint16_t i = 0; i < MT_FIELD_COUNT; i++) {
+    const MtFieldDef& f = MT_FIELDS[i];
+    if (f.scope == scope && f.type == type && f.field == field) return &f;
+  }
+  return nullptr;
+}
+
+static void mtStoreBlob(uint8_t* dst, uint16_t& len, bool& have, const uint8_t* d, size_t n) {
+  if (n > MT_BLOB_MAX) n = MT_BLOB_MAX;
+  memcpy(dst, d, n);
+  len = (uint16_t)n;
+  have = true;
+}
+
+static void mtStoreChannelMsg(const uint8_t* d, size_t n);   // fwd
+
+static void mtStoreConfigMsg(const uint8_t* d, size_t n) {   // Config message body
+  PbR r(d, n); uint32_t f, w;
+  while (r.next(f, w)) {
+    if (w == 2 && f >= 1 && f <= 10) {
+      const uint8_t* b; size_t l;
+      if (r.bytes(b, l)) mtStoreBlob(s_cfgBuf[f - 1], s_cfgLen[f - 1], s_cfgHave[f - 1], b, l);
+    } else r.skip(w);
+  }
+  s_settingsReady = true;
+}
+
+static void mtStoreModuleMsg(const uint8_t* d, size_t n) {   // ModuleConfig message body
+  PbR r(d, n); uint32_t f, w;
+  while (r.next(f, w)) {
+    if (w == 2 && f >= 1 && f <= MT_MOD_SLOTS) {
+      const uint8_t* b; size_t l;
+      if (r.bytes(b, l)) mtStoreBlob(s_modBuf[f - 1], s_modLen[f - 1], s_modHave[f - 1], b, l);
+    } else r.skip(w);
+  }
+  s_settingsReady = true;
+}
+
+static void mtStoreChannelMsg(const uint8_t* d, size_t n) {  // Channel message body
+  PbR r(d, n); int idx = 0; uint32_t f, w;
+  while (r.next(f, w)) {
+    if (f == 1 && w == 0) { uint64_t v; r.varint(v); idx = (int)v; }
+    else r.skip(w);
+  }
+  if (idx < 0 || idx > 7) return;
+  mtStoreBlob(s_chBuf[idx], s_chLen[idx], s_chHave[idx], d, n);
+}
+
+static void mtParseAdmin(const uint8_t* d, size_t n) {       // AdminMessage
+  PbR r(d, n); uint32_t f, w;
+  while (r.next(f, w)) {
+    const uint8_t* b; size_t l;
+    if (w == 2 && f == 2) { if (r.bytes(b, l)) mtStoreChannelMsg(b, l); }
+    else if (w == 2 && f == 4) { if (r.bytes(b, l)) mtStoreBlob(s_ownerBuf, s_ownerLen, s_ownerHave, b, l); }
+    else if (w == 2 && f == 6) { if (r.bytes(b, l)) mtStoreConfigMsg(b, l); }
+    else if (w == 2 && f == 8) { if (r.bytes(b, l)) mtStoreModuleMsg(b, l); }
+    else r.skip(w);
+  }
+}
+
+static void mtChannelParts(uint8_t idx, uint32_t& role, const uint8_t*& settings, size_t& slen) {
+  role = 0; settings = nullptr; slen = 0;
+  if (idx > 7 || !s_chHave[idx]) return;
+  PbR r(s_chBuf[idx], s_chLen[idx]); uint32_t f, w;
+  while (r.next(f, w)) {
+    if (f == 3 && w == 0) { uint64_t v; r.varint(v); role = (uint32_t)v; }
+    else if (f == 2 && w == 2) { const uint8_t* b; size_t l; if (r.bytes(b, l)) { settings = b; slen = l; } }
+    else r.skip(w);
+  }
+}
+
+static void mtJsonEsc(String& o, const String& s) {
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '"' || c == '\\') { o += '\\'; o += c; }
+    else if ((uint8_t)c < 0x20) { char b[10]; snprintf(b, sizeof(b), "\\u%04x", (unsigned)(uint8_t)c); o += b; }
+    else o += c;
+  }
+}
+
+static bool mtDecodeIntoJson(String& o, uint8_t scope, uint8_t type, const uint8_t* d,
+                             size_t n, bool& first) {
+  PbR r(d, n); uint32_t f, w; bool any = false;
+  while (r.next(f, w)) {
+    const MtFieldDef* fd = mtFindField(scope, type, f);
+    if (!fd || fd->rep) { r.skip(w); continue; }
+    if (fd->kind == 4 && w != 2) { r.skip(w); continue; }
+    if (fd->kind != 4 && w != 0 && w != 5) { r.skip(w); continue; }
+    if (!first) o += ',';
+    first = false; any = true;
+    o += '"'; o += fd->key; o += "\":";
+    if (fd->kind == 4) {
+      const uint8_t* b; size_t l;
+      if (!r.bytes(b, l)) return any;
+      o += '"'; mtJsonEsc(o, rdStr(b, l)); o += '"';
+    } else if (fd->kind == 3) {
+      uint32_t bits = 0;
+      if (!r.fixed32(bits)) return any;
+      float fv; memcpy(&fv, &bits, 4);
+      char buf[24]; snprintf(buf, sizeof(buf), "%.3f", fv); o += buf;
+    } else {
+      uint64_t v = 0;
+      if (!r.varint(v)) return any;
+      char buf[20];
+      if (fd->kind == 2) snprintf(buf, sizeof(buf), "%d", (int32_t)v);
+      else if (fd->kind == 5 || fd->kind == 1) snprintf(buf, sizeof(buf), "%u", (uint32_t)v);
+      else { o += v ? "1" : "0"; continue; }
+      o += buf;
+    }
+  }
+  return any;
+}
+
+static bool mtEncodeValue(std::vector<uint8_t>& o, uint32_t f, uint8_t kind, const String& in) {
+  String t = in; t.trim();
+  switch (kind) {
+    case 0:  pU(o, f, (t == "1" || t.equalsIgnoreCase("true")) ? 1 : 0); return true;
+    case 1:  pU(o, f, (uint32_t)strtoul(t.c_str(), nullptr, 10)); return true;
+    case 5:  pU(o, f, (uint32_t)strtoul(t.c_str(), nullptr, 10)); return true;
+    case 2:  { int32_t x = (int32_t)strtol(t.c_str(), nullptr, 10); pt(o, f, 0); pv(o, (uint64_t)(int64_t)x); return true; }
+    case 3:  { float x = strtof(t.c_str(), nullptr); uint32_t bits; memcpy(&bits, &x, 4); pF(o, f, bits); return true; }
+    case 4:  pB(o, f, (const uint8_t*)t.c_str(), t.length()); return true;
+  }
+  return false;
+}
+
+// copy d, replacing one field's value (or appending it)
+static bool mtEncodeBlob(uint8_t scope, uint8_t type, const uint8_t* d, size_t n,
+                         uint8_t field, const String& value, std::vector<uint8_t>& out) {
+  const MtFieldDef* fd = mtFindField(scope, type, field);
+  if (!fd || fd->rep) return false;
+  PbR r(d, n); uint32_t f, w; bool done = false;
+  while (r.i < n) {
+    size_t start = r.i;
+    if (!r.next(f, w)) break;
+    PbR tmp(r.p, r.n); tmp.i = r.i;
+    if (!tmp.skip(w)) break;
+    size_t end = tmp.i;
+    if (f == field && !done) {
+      if (!mtEncodeValue(out, f, fd->kind, value)) return false;
+      done = true;
+    } else {
+      out.insert(out.end(), d + start, d + end);
+    }
+    r.i = end;
+  }
+  if (!done && !mtEncodeValue(out, field, fd->kind, value)) return false;
+  return true;
+}
+
+static void mtAdminFrame(const std::vector<uint8_t>& admin) {
+  std::vector<uint8_t> data;
+  pU(data, 1, 6);                 // PortNum ADMIN_APP
+  pU(data, 3, 1);                 // Data.want_response -> handlers reply
+  pB(data, 2, admin);
+  std::vector<uint8_t> pkt;
+  pF(pkt, 1, 0);                  // from = 0 -> treated as local admin request
+  pF(pkt, 2, s_mtMyNum);          // to (the node itself)
+  pB(pkt, 4, data);
+  pF(pkt, 6, rndId());
+  pU(pkt, 10, 1);                 // want_ack
+  std::vector<uint8_t> frame;
+  pB(frame, 1, pkt);
+  mtWriteToRadio(frame);
+}
+
+bool meshBridgeSettingsReady() { return s_settingsReady; }
+
+void meshBridgeRequestSettings() { s_lastOwnerReq = 0; s_reqStage = 0; }
+
+void meshBridgeRequestOwner() {
+  std::vector<uint8_t> a;
+  pU(a, 3, 1);      // get_owner_request
+  mtAdminFrame(a);
+}
+
+String meshBridgeConfigJson() {
+  String o; o.reserve(6144);
+  o += "{\"ready\":"; o += s_settingsReady ? "true" : "false";
+
+  o += ",\"config\":{";
+  bool g = false;
+  for (uint8_t t = 0; t < MT_CFG_SLOTS; t++) {
+    if (!s_cfgHave[t]) continue;
+    if (g) o += ','; g = true;
+    char kb[6]; snprintf(kb, sizeof(kb), "%u", (unsigned)t);
+    o += '"'; o += kb; o += "\":{";
+    bool first = true;
+    mtDecodeIntoJson(o, 0, t, s_cfgBuf[t], s_cfgLen[t], first);
+    o += '}';
+  }
+
+  o += "},\"module\":{";
+  g = false;
+  for (uint8_t t = 0; t < MT_MOD_SLOTS; t++) {
+    if (!s_modHave[t]) continue;
+    if (g) o += ','; g = true;
+    char kb[6]; snprintf(kb, sizeof(kb), "%u", (unsigned)t);
+    o += '"'; o += kb; o += "\":{";
+    bool first = true;
+    mtDecodeIntoJson(o, 1, t, s_modBuf[t], s_modLen[t], first);
+    o += '}';
+  }
+
+  o += "},\"owner\":{";
+  if (s_ownerHave) { bool first = true; mtDecodeIntoJson(o, 3, 0, s_ownerBuf, s_ownerLen, first); }
+
+  o += "},\"channel\":{";
+  g = false;
+  for (uint8_t i = 0; i < 8; i++) {
+    if (!s_chHave[i]) continue;
+    if (g) o += ','; g = true;
+    uint32_t role; const uint8_t* settings; size_t slen;
+    mtChannelParts(i, role, settings, slen);
+    char kb[6]; snprintf(kb, sizeof(kb), "%u", (unsigned)i);
+    o += '"'; o += kb; o += "\":{\"index\":"; o += kb;
+    o += ",\"role\":";
+    char rb[8]; snprintf(rb, sizeof(rb), "%u", (unsigned)role); o += rb;
+    if (settings) { bool first = false; mtDecodeIntoJson(o, 2, 0, settings, slen, first); }
+    o += '}';
+  }
+  o += "}}";
+  return o;
+}
+
+bool meshBridgeApplySetting(uint8_t scope, uint8_t type, uint8_t field, const String& value, String& err) {
+  if (!s_connected || s_proto != "meshtastic") { err = "not connected to a Meshtastic node"; return false; }
+
+  std::vector<uint8_t> begin, commit;
+  pU(begin, 64, 1);       // begin_edit_settings
+  pU(commit, 65, 1);      // commit_edit_settings
+  std::vector<uint8_t> cluster;
+
+  if (scope == 0) {                       // Config
+    if (type >= MT_CFG_SLOTS || !s_cfgHave[type]) { err = "config not loaded"; return false; }
+    if (!mtEncodeBlob(0, type, s_cfgBuf[type], s_cfgLen[type], field, value, cluster)) { err = "unsupported setting"; return false; }
+    std::vector<uint8_t> cfg; pB(cfg, type + 1, cluster);
+    std::vector<uint8_t> admin; pB(admin, 34, cfg);        // set_config
+    mtAdminFrame(begin); mtAdminFrame(admin); mtAdminFrame(commit);
+    mtStoreBlob(s_cfgBuf[type], s_cfgLen[type], s_cfgHave[type], cluster.data(), cluster.size());
+    return true;
+  }
+
+  if (scope == 1) {                       // ModuleConfig
+    if (type >= MT_MOD_SLOTS || !s_modHave[type]) { err = "module config not loaded"; return false; }
+    if (!mtEncodeBlob(1, type, s_modBuf[type], s_modLen[type], field, value, cluster)) { err = "unsupported setting"; return false; }
+    std::vector<uint8_t> mc; pB(mc, type + 1, cluster);
+    std::vector<uint8_t> admin; pB(admin, 35, mc);         // set_module_config
+    mtAdminFrame(begin); mtAdminFrame(admin); mtAdminFrame(commit);
+    mtStoreBlob(s_modBuf[type], s_modLen[type], s_modHave[type], cluster.data(), cluster.size());
+    return true;
+  }
+
+  if (scope == 2) {                       // Channel
+    if (type > 7 || !s_chHave[type]) { err = "channel not loaded"; return false; }
+    uint32_t role; const uint8_t* settings; size_t slen;
+    mtChannelParts(type, role, settings, slen);
+    if (!settings) { err = "channel settings missing"; return false; }
+    if (!mtEncodeBlob(2, 0, settings, slen, field, value, cluster)) { err = "unsupported setting"; return false; }
+    std::vector<uint8_t> ch;
+    pU(ch, 1, type);
+    pB(ch, 2, cluster);
+    pU(ch, 3, role ? role : 1);
+    std::vector<uint8_t> admin; pB(admin, 33, ch);         // set_channel
+    mtAdminFrame(begin); mtAdminFrame(admin); mtAdminFrame(commit);
+    mtStoreBlob(s_chBuf[type], s_chLen[type], s_chHave[type], ch.data(), ch.size());
+    return true;
+  }
+
+  if (scope == 3) {                       // Owner (User)
+    if (!s_ownerHave) { err = "owner not loaded"; return false; }
+    if (!mtEncodeBlob(3, 0, s_ownerBuf, s_ownerLen, field, value, cluster)) { err = "unsupported setting"; return false; }
+    std::vector<uint8_t> admin; pB(admin, 32, cluster);    // set_owner
+    mtAdminFrame(begin); mtAdminFrame(admin); mtAdminFrame(commit);
+    mtStoreBlob(s_ownerBuf, s_ownerLen, s_ownerHave, cluster.data(), cluster.size());
+    return true;
+  }
+
+  err = "bad scope";
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // MeshCore parsing
 // ---------------------------------------------------------------------------
 static bool writeFrame(const uint8_t* d, size_t n) {
@@ -337,7 +646,7 @@ static void mtParseNodeInfo(const uint8_t* d, size_t n) {
 
 static void mtParseChannel(const uint8_t* d, size_t n) {
   PbR r(d, n);
-  int idx = -1; uint32_t f, w; String name;
+  int idx = 0; uint32_t f, w; String name;
   while (r.next(f, w)) {
     if (f == 1 && w == 0) { uint64_t v; r.varint(v); idx = (int)v; }
     else if (f == 2 && w == 2) {
@@ -355,6 +664,7 @@ static void mtParseChannel(const uint8_t* d, size_t n) {
     s_channels[idx] = name.length() ? name : (String("Channel ") + (idx + 1));
     if (idx + 1 > s_maxChannels) s_maxChannels = idx + 1;
   }
+  mtStoreChannelMsg(d, n);
 }
 
 static void mtParseMyInfo(const uint8_t* d, size_t n) {
@@ -406,6 +716,7 @@ static void mtParsePacket(const uint8_t* d, size_t n) {
   }
   (void)pktId; (void)hopStart; (void)rxRssi;
 
+  if (haveData && portnum == 6 && payload) mtParseAdmin(payload, payLen);
   if (!haveData || portnum != PN_TEXT_MESSAGE || !payload) return;
 
   MeshMessage m;
@@ -432,6 +743,8 @@ static void mtParseFromRadio(const uint8_t* d, size_t n) {
   while (r.next(f, w)) {
     if (f == 2 && w == 2) { const uint8_t* b; size_t l; if (r.bytes(b, l)) mtParsePacket(b, l); }
     else if (f == 3 && w == 2) { const uint8_t* b; size_t l; if (r.bytes(b, l)) mtParseMyInfo(b, l); }
+    else if (f == 5 && w == 2) { const uint8_t* b; size_t l; if (r.bytes(b, l)) mtStoreConfigMsg(b, l); }
+    else if (f == 9 && w == 2) { const uint8_t* b; size_t l; if (r.bytes(b, l)) mtStoreModuleMsg(b, l); }
     else if (f == 4 && w == 2) { const uint8_t* b; size_t l; if (r.bytes(b, l)) mtParseNodeInfo(b, l); }
     else if (f == 10 && w == 2) { const uint8_t* b; size_t l; if (r.bytes(b, l)) mtParseChannel(b, l); }
     else if (f == 7 && w == 0) { uint64_t v; r.varint(v); s_mtDone = true; Serial.printf("[BRIDGE] config complete id=%u\n", (unsigned)v); }
@@ -672,6 +985,7 @@ void meshBridgeBegin() {
 
   NimBLEDevice::init("TastyPiece");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+  NimBLEDevice::setMTU(517);
   s_scan = NimBLEDevice::getScan();
   static ScanCB cb;
   s_scan->setAdvertisedDeviceCallbacks(&cb, false);
@@ -761,11 +1075,17 @@ void meshBridgeLoop() {
   if (!s_connected) return;
 
   if (s_proto == "meshtastic") {
-    if (!s_mtConfigSent) { mtSendWantConfig(); s_mtConfigSent = true; }
+    if (!s_mtConfigSent) { mtSendWantConfig(); s_mtConfigSent = true; s_reqStage = 0; }
     if (s_mtRead || now - s_mtLastRead > 1500) {
       mtReadFromRadio();
       s_mtLastRead = now;
       s_mtRead = false;
+    }
+    // configs, module configs and channels arrive with want_config;
+    // only the owner has to be fetched via AdminMessage (retry until we have it)
+    if (s_mtDone && !s_ownerHave && now - s_lastOwnerReq > 2500) {
+      meshBridgeRequestOwner();
+      s_lastOwnerReq = now;
     }
     if (s_mtDone && s_version.isEmpty()) s_version = "(meshtastic)";
     return;
