@@ -126,6 +126,17 @@ POST /api/time    -> {epoch}
     Wi-Fi transmitter (see README warning).
 ```
 
+## Links
+
+```
+  store / docs ..... snail3d.com/lab
+  source access .... $5, private repo invite
+                     buy.polar.sh/polar_cl_JKiVqefFRid6LfUoj8PzARYhBSHkqZGpkiI061JqyBR
+  demo (9:16 Short)  youtu.be/_db3JFUq4_E
+  repo ............. github.com/Snail3D/TastyPiece
+  support .......... snailmail3d@gmail.com
+```
+
 ```
 ==================================================
   Built by Snail3D · snail3d.com/lab
